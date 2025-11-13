@@ -194,7 +194,9 @@ def index():
         'environment': os.getenv('FLASK_ENV', 'development'),
         'endpoints': {
             '/health': 'Health check',
+            '/film-data': 'Get all raw data from Film data sheet (all columns and rows)',
             '/api/film-data': 'Get surgery schedule data from Google Sheets',
+            '/api/google-sheets/film-data': 'Get all raw data from Film data sheet (all columns and rows)',
             '/api/clear-cache': 'Clear data cache (POST)'
         }
     })
@@ -259,6 +261,115 @@ def get_film_data():
         }), 500
 
 
+@app.route('/film-data', methods=['GET'])
+@app.route('/api/google-sheets/film-data', methods=['GET'])
+def get_google_sheets_all_data():
+    """Get all raw data from Google Sheets 'Film data' sheet (all columns and rows)"""
+    try:
+        # Get spreadsheet ID from environment
+        spreadsheet_id = os.getenv('GOOGLE_SPREADSHEET_ID')
+        if not spreadsheet_id:
+            raise ValueError("GOOGLE_SPREADSHEET_ID not set in environment variables")
+
+        print(f"📊 Fetching all raw data from Google Sheets: {spreadsheet_id}")
+
+        # Get Google Sheets client
+        client = get_google_sheets_client()
+
+        # Open the spreadsheet
+        spreadsheet = client.open_by_key(spreadsheet_id)
+
+        # Get the 'Film data' sheet
+        sheet = spreadsheet.worksheet('Film data')
+
+        # Get all values from the sheet (including headers)
+        all_values = sheet.get_all_values()
+
+        if not all_values:
+            return jsonify({
+                'success': True,
+                'data': {
+                    'headers': [],
+                    'rows': [],
+                    'all_data': []
+                },
+                'total_rows': 0,
+                'total_columns': 0,
+                'timestamp': datetime.now().isoformat(),
+                'source': 'Google Sheets (Film data)'
+            })
+
+        # Separate headers and data rows
+        headers = all_values[0] if len(all_values) > 0 else []
+        data_rows = all_values[1:] if len(all_values) > 1 else []
+
+        # Get sheet metadata
+        total_rows = len(all_values)
+        total_columns = len(headers) if headers else 0
+
+        print(f"✅ Successfully fetched all data: {total_rows} rows x {total_columns} columns")
+
+        # Return response with all data formats
+        response = {
+            'success': True,
+            'data': {
+                'headers': headers,
+                'rows': data_rows,
+                'all_data': all_values  # Raw data including headers
+            },
+            'total_rows': total_rows,
+            'total_columns': total_columns,
+            'timestamp': datetime.now().isoformat(),
+            'source': 'Google Sheets (Film data)',
+            'sheet_info': {
+                'name': 'Film data',
+                'spreadsheet_id': spreadsheet_id,
+                'has_headers': len(headers) > 0,
+                'data_rows_count': len(data_rows)
+            }
+        }
+
+        return jsonify(response)
+
+    except gspread.exceptions.WorksheetNotFound:
+        print("❌ Worksheet 'Film data' not found")
+        return jsonify({
+            'success': False,
+            'error': "Worksheet 'Film data' not found in spreadsheet",
+            'data': None,
+            'timestamp': datetime.now().isoformat()
+        }), 404
+
+    except gspread.exceptions.SpreadsheetNotFound:
+        print("❌ Spreadsheet not found")
+        return jsonify({
+            'success': False,
+            'error': "Spreadsheet not found. Check GOOGLE_SPREADSHEET_ID and service account permissions",
+            'data': None,
+            'timestamp': datetime.now().isoformat()
+        }), 404
+
+    except ValueError as e:
+        return jsonify({
+            'success': False,
+            'error': str(e),
+            'data': None,
+            'timestamp': datetime.now().isoformat()
+        }), 400
+
+    except Exception as e:
+        error_message = str(e)
+        print(f"❌ Error in /api/google-sheets/film-data: {error_message}")
+        traceback.print_exc()
+
+        return jsonify({
+            'success': False,
+            'error': error_message,
+            'data': None,
+            'timestamp': datetime.now().isoformat()
+        }), 500
+
+
 @app.route('/api/clear-cache', methods=['POST'])
 def clear_cache():
     """Clear the data cache"""
@@ -285,7 +396,9 @@ def not_found(error):
         'available_endpoints': [
             '/',
             '/health',
+            '/film-data',
             '/api/film-data',
+            '/api/google-sheets/film-data',
             '/api/clear-cache'
         ]
     }), 404
