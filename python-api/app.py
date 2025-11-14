@@ -496,6 +496,10 @@ def get_run_time():
             start_datetime = row.get('start', '').strip()
             duration_str = row.get('สรุปเวลา', '').strip()
             
+            # Skip if no start datetime
+            if not start_datetime or ' ' not in start_datetime:
+                continue
+            
             # Check if caller is in target range
             if caller not in target_callers:
                 continue
@@ -507,27 +511,25 @@ def get_run_time():
             if duration_seconds <= MIN_DURATION_SECONDS:
                 continue
             
-            # Filter by date if provided
-            if date_param and ' ' in start_datetime:
-                call_date = start_datetime.split(' ')[0]
-                if call_date != date_param:
-                    continue
+            # Filter by date
+            call_date = start_datetime.split(' ')[0]
+            if call_date != date_param:
+                continue
             
             # Extract hour from start datetime
-            if ' ' in start_datetime:
-                time_part = start_datetime.split(' ')[1] if len(start_datetime.split(' ')) > 1 else ''
-                if time_part:
-                    try:
-                        hour = int(time_part.split(':')[0])
-                        
-                        # Find matching time slot
-                        for slot in time_slots:
-                            if slot['hour_start'] <= hour < slot['hour_end']:
-                                slot_counts[slot['start']][caller] += 1
-                                agent_totals[caller] += 1
-                                break
-                    except (ValueError, IndexError):
-                        continue  # Skip if time parsing fails
+            time_part = start_datetime.split(' ')[1]
+            if time_part:
+                try:
+                    hour = int(time_part.split(':')[0])
+                    
+                    # Find matching time slot (9:00-20:00)
+                    for slot in time_slots:
+                        if slot['hour_start'] <= hour < slot['hour_end']:
+                            slot_counts[slot['start']][caller] += 1
+                            agent_totals[caller] += 1
+                            break
+                except (ValueError, IndexError):
+                    continue  # Skip if time parsing fails
         
         # Build response in format expected by React
         # Format: { "9": { "101": 5, "102": 3, ... }, "10": { ... }, totals: { "101": 50, ... } }
