@@ -487,8 +487,11 @@ def get_run_time():
         for caller in target_callers:
             agent_totals[caller] = 0
         
-        # Minimum duration threshold: 30 minutes = 1800 seconds
-        MIN_DURATION_SECONDS = 1800  # 0:30:00
+        # Minimum duration threshold: 30 seconds
+        MIN_DURATION_SECONDS = 30
+        
+        # Track total calls counted
+        total_calls_counted = 0
         
         # Process each row
         for row in data:
@@ -500,15 +503,15 @@ def get_run_time():
             if not start_datetime or ' ' not in start_datetime:
                 continue
             
-            # Check if caller is in target range
+            # Check if caller is in target range (101-108 only)
             if caller not in target_callers:
                 continue
             
             # Parse duration
             duration_seconds = parse_duration_to_seconds(duration_str)
             
-            # Only count if duration > 30 minutes
-            if duration_seconds <= MIN_DURATION_SECONDS:
+            # Only count if duration >= 30 seconds
+            if duration_seconds < MIN_DURATION_SECONDS:
                 continue
             
             # Filter by date
@@ -527,36 +530,43 @@ def get_run_time():
                         if slot['hour_start'] <= hour < slot['hour_end']:
                             slot_counts[slot['start']][caller] += 1
                             agent_totals[caller] += 1
+                            total_calls_counted += 1
                             break
                 except (ValueError, IndexError):
                     continue  # Skip if time parsing fails
         
         # Build response in format expected by React
-        # Format: { "9": { "101": 5, "102": 3, ... }, "10": { ... }, totals: { "101": 50, ... } }
         response_data = {
             'success': True,
+            'date': date_param,
             'timeSlots': [],
             'slotCounts': slot_counts,  # สำหรับใช้ใน getCallTableValue
             'totals': agent_totals,     # จำนวนรวมต่อ agent
+            'totalCalls': total_calls_counted,
+            'message': f'Counted {total_calls_counted} calls for {date_param} with duration >= {MIN_DURATION_SECONDS} seconds',
             'timestamp': datetime.now().isoformat(),
             'source': 'Google Sheets (สรุป call_AI)',
             'filter_criteria': {
                 'callers': target_callers,
-                'min_duration': '0:30:00',
                 'min_duration_seconds': MIN_DURATION_SECONDS,
                 'time_slots_count': len(time_slots),
-                'date': date_param if date_param else 'all'
+                'date': date_param
             }
         }
         
-        # Add timeSlots array for detailed view
+        # Add timeSlots array for detailed view (เฉพาะช่วงที่มีข้อมูล)
         for slot in time_slots:
-            response_data['timeSlots'].append({
-                'label': slot['label'],
-                'hourStart': slot['start'],
-                'key': slot['start'],
-                'agentCounts': slot_counts[slot['start']]
-            })
+            slot_data = slot_counts[slot['start']]
+            # เพิ่มเฉพาะช่วงที่มีการโทรจริงๆ
+            if any(count > 0 for count in slot_data.values()):
+                # กรองเฉพาะ agent ที่มีการโทร
+                agent_counts_filtered = {agent: count for agent, count in slot_data.items() if count > 0}
+                response_data['timeSlots'].append({
+                    'hourStart': slot['start'],
+                    'hourEnd': str(slot['hour_end']),
+                    'label': slot['label'],
+                    'agentCounts': agent_counts_filtered
+                })
         
         return jsonify(response_data)
         
