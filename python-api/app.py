@@ -185,6 +185,11 @@ def fetch_call_ai_data():
         headers = all_values[0]
         data_rows = all_values[1:]
 
+        # Debug: Print headers and sample data
+        print(f"📋 Headers found in สรุป call_AI sheet: {headers}")
+        if data_rows:
+            print(f"📝 Sample row (first): {data_rows[0]}")
+
         # Convert to list of dictionaries
         result = []
         for idx, row in enumerate(data_rows, start=2):  # Start from row 2 (1-indexed)
@@ -230,6 +235,51 @@ def parse_duration_to_seconds(duration_str):
             
     except (ValueError, AttributeError):
         return 0
+
+
+def parse_google_sheets_datetime(datetime_str):
+    """
+    Parse Google Sheets datetime format to standard format
+    Input: '7/11/2025, 11:46:51' (DD/MM/YYYY, HH:MM:SS)
+    Output: {'date': '2025-11-07', 'time': '11:46:51', 'hour': 11}
+    """
+    try:
+        if not datetime_str or datetime_str.strip() == '':
+            return None
+        
+        # Split by comma to separate date and time
+        parts = datetime_str.strip().split(',')
+        if len(parts) != 2:
+            return None
+        
+        date_part = parts[0].strip()  # '7/11/2025'
+        time_part = parts[1].strip()  # '11:46:51'
+        
+        # Parse date (DD/MM/YYYY)
+        date_components = date_part.split('/')
+        if len(date_components) != 3:
+            return None
+        
+        day = int(date_components[0])
+        month = int(date_components[1])
+        year = int(date_components[2])
+        
+        # Convert to YYYY-MM-DD format
+        formatted_date = f"{year:04d}-{month:02d}-{day:02d}"
+        
+        # Parse hour from time
+        time_components = time_part.split(':')
+        hour = int(time_components[0]) if time_components else 0
+        
+        return {
+            'date': formatted_date,
+            'time': time_part,
+            'hour': hour,
+            'datetime': datetime_str
+        }
+        
+    except (ValueError, AttributeError, IndexError):
+        return None
 
 
 def cache_data(func):
@@ -493,18 +543,32 @@ def get_run_time():
         # Track total calls counted
         total_calls_counted = 0
         
+        # Debug: Print sample data to verify column names
+        if data:
+            print(f"🔍 Sample row keys: {list(data[0].keys())}")
+            print(f"🔍 Sample row data: {data[0]}")
+        
         # Process each row
+        processed_count = 0
+        skipped_no_datetime = 0
+        skipped_wrong_caller = 0
+        skipped_duration = 0
+        skipped_date = 0
+        
         for row in data:
             caller = row.get('ผู้โทร', '').strip()
             start_datetime = row.get('start', '').strip()
             duration_str = row.get('สรุปเวลา', '').strip()
             
-            # Skip if no start datetime
-            if not start_datetime or ' ' not in start_datetime:
+            # Parse Google Sheets datetime format (7/11/2025, 11:46:51)
+            parsed_datetime = parse_google_sheets_datetime(start_datetime)
+            if not parsed_datetime:
+                skipped_no_datetime += 1
                 continue
             
             # Check if caller is in target range (101-108 only)
             if caller not in target_callers:
+                skipped_wrong_caller += 1
                 continue
             
             # Parse duration
@@ -512,28 +576,36 @@ def get_run_time():
             
             # Only count if duration >= 30 seconds
             if duration_seconds < MIN_DURATION_SECONDS:
+                skipped_duration += 1
                 continue
             
-            # Filter by date
-            call_date = start_datetime.split(' ')[0]
-            if call_date != date_param:
+            # Filter by date (compare YYYY-MM-DD format)
+            if parsed_datetime['date'] != date_param:
+                skipped_date += 1
                 continue
             
-            # Extract hour from start datetime
-            time_part = start_datetime.split(' ')[1]
-            if time_part:
-                try:
-                    hour = int(time_part.split(':')[0])
-                    
-                    # Find matching time slot (9:00-20:00)
-                    for slot in time_slots:
-                        if slot['hour_start'] <= hour < slot['hour_end']:
-                            slot_counts[slot['start']][caller] += 1
-                            agent_totals[caller] += 1
-                            total_calls_counted += 1
-                            break
-                except (ValueError, IndexError):
-                    continue  # Skip if time parsing fails
+            processed_count += 1
+            
+            # Get hour from parsed datetime
+            hour = parsed_datetime['hour']
+            
+            # Find matching time slot (9:00-20:00)
+            for slot in time_slots:
+                if slot['hour_start'] <= hour < slot['hour_end']:
+                    slot_counts[slot['start']][caller] += 1
+                    agent_totals[caller] += 1
+                    total_calls_counted += 1
+                    break
+        
+        # Debug: Print filtering statistics
+        print(f"📊 Filtering stats:")
+        print(f"  - Total rows: {len(data)}")
+        print(f"  - Processed successfully: {processed_count}")
+        print(f"  - Skipped (no datetime): {skipped_no_datetime}")
+        print(f"  - Skipped (wrong caller): {skipped_wrong_caller}")
+        print(f"  - Skipped (duration < {MIN_DURATION_SECONDS}s): {skipped_duration}")
+        print(f"  - Skipped (wrong date): {skipped_date}")
+        print(f"  - Total calls counted: {total_calls_counted}")
         
         # Build response in format expected by React
         response_data = {
@@ -546,6 +618,14 @@ def get_run_time():
             'message': f'Counted {total_calls_counted} calls for {date_param} with duration >= {MIN_DURATION_SECONDS} seconds',
             'timestamp': datetime.now().isoformat(),
             'source': 'Google Sheets (สรุป call_AI)',
+            'debug': {
+                'total_rows': len(data),
+                'processed': processed_count,
+                'skipped_no_datetime': skipped_no_datetime,
+                'skipped_wrong_caller': skipped_wrong_caller,
+                'skipped_duration': skipped_duration,
+                'skipped_date': skipped_date
+            },
             'filter_criteria': {
                 'callers': target_callers,
                 'min_duration_seconds': MIN_DURATION_SECONDS,
