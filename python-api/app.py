@@ -13,6 +13,12 @@ from functools import wraps
 import gspread
 from google.oauth2.service_account import Credentials
 from dotenv import load_dotenv
+import requests
+import json
+from facebook_business.api import FacebookAdsApi
+from facebook_business.adobjects.adaccount import AdAccount
+from google.ads.googleads.client import GoogleAdsClient
+from google.ads.googleads.errors import GoogleAdsException
 
 # Load environment variables
 load_dotenv()
@@ -324,7 +330,10 @@ def index():
             '/api/film-data': 'Get surgery schedule data from Google Sheets',
             '/api/google-sheets/film-data': 'Get all raw data from Film data sheet (all columns and rows)',
             '/run-time': 'Get call statistics from สรุป call_AI sheet mapped by time slots (9:00-20:00) for callers 101-108',
-            '/api/clear-cache': 'Clear data cache (POST)'
+            '/api/clear-cache': 'Clear data cache (POST)',
+            '/api/facebook-ads-campaigns': 'Get Facebook Ads campaigns data (GET)',
+            '/api/google-sheets-data': 'Get Google Sheets data from เคสได้ชื่อเบอร์ sheet (GET)',
+            '/api/google-ads': 'Get Google Ads data (GET)'
         }
     })
 
@@ -688,6 +697,570 @@ def clear_cache():
     })
 
 
+# ========================================
+# Facebook Ads API
+# ========================================
+
+def get_date_range(date_preset=None, time_range=None):
+    """Convert date_preset or time_range to since/until format"""
+    if time_range:
+        return time_range.get('since'), time_range.get('until')
+    
+    today = datetime.now()
+    
+    if date_preset == 'today':
+        return today.strftime('%Y-%m-%d'), today.strftime('%Y-%m-%d')
+    elif date_preset == 'yesterday':
+        yesterday = today - timedelta(days=1)
+        return yesterday.strftime('%Y-%m-%d'), yesterday.strftime('%Y-%m-%d')
+    elif date_preset == 'last_7d':
+        since = (today - timedelta(days=7)).strftime('%Y-%m-%d')
+        return since, today.strftime('%Y-%m-%d')
+    elif date_preset == 'last_30d':
+        since = (today - timedelta(days=30)).strftime('%Y-%m-%d')
+        return since, today.strftime('%Y-%m-%d')
+    elif date_preset == 'this_month':
+        since = today.replace(day=1).strftime('%Y-%m-%d')
+        return since, today.strftime('%Y-%m-%d')
+    elif date_preset == 'last_month':
+        first_day_this_month = today.replace(day=1)
+        last_day_last_month = first_day_this_month - timedelta(days=1)
+        first_day_last_month = last_day_last_month.replace(day=1)
+        return first_day_last_month.strftime('%Y-%m-%d'), last_day_last_month.strftime('%Y-%m-%d')
+    else:
+        return today.strftime('%Y-%m-%d'), today.strftime('%Y-%m-%d')
+
+
+@app.route('/api/facebook-ads-campaigns', methods=['GET'])
+def get_facebook_ads_campaigns():
+    """
+    Get Facebook Ads campaigns data
+    
+    Query Parameters:
+    - level: "campaign" | "adset" | "ad" (default: "ad")
+    - date_preset: "today" | "yesterday" | "last_7d" | "last_30d" | "this_month" | "last_month"
+    - time_range: JSON string {"since": "YYYY-MM-DD", "until": "YYYY-MM-DD"}
+    - action_breakdowns: "action_type" (default)
+    - filtering: JSON string for filtering
+    - time_increment: "1" for daily breakdown (optional)
+    """
+    try:
+        # Get environment variables
+        access_token = os.getenv('FACEBOOK_ACCESS_TOKEN')
+        ad_account_id = os.getenv('FACEBOOK_AD_ACCOUNT_ID')
+        
+        if not access_token or not ad_account_id:
+            return jsonify({
+                'success': False,
+                'error': 'Missing Facebook credentials. Please set FACEBOOK_ACCESS_TOKEN and FACEBOOK_AD_ACCOUNT_ID',
+                'data': []
+            }), 400
+        
+        # Get query parameters
+        level = request.args.get('level', 'ad')
+        date_preset = request.args.get('date_preset', 'today')
+        time_range_param = request.args.get('time_range')
+        action_breakdowns = request.args.get('action_breakdowns', 'action_type')
+        filtering_param = request.args.get('filtering')
+        time_increment = request.args.get('time_increment')
+        
+        # Parse time_range if provided
+        time_range = None
+        if time_range_param:
+            try:
+                time_range = json.loads(time_range_param)
+            except json.JSONDecodeError:
+                return jsonify({
+                    'success': False,
+                    'error': 'Invalid time_range format. Expected JSON string.',
+                    'data': []
+                }), 400
+        
+        # Get date range
+        since, until = get_date_range(date_preset, time_range)
+        
+        # Initialize Facebook API
+        FacebookAdsApi.init(access_token=access_token)
+        
+        # Get ad account
+        account = AdAccount(ad_account_id)
+        
+        # Build params for insights
+        params = {
+            'level': level,
+            'time_range': {'since': since, 'until': until},
+            'action_breakdowns': [action_breakdowns] if action_breakdowns else None,
+        }
+        
+        # Add time_increment if specified (for daily breakdown)
+        if time_increment:
+            params['time_increment'] = time_increment
+        
+        # Add filtering if specified
+        if filtering_param:
+            try:
+                filtering = json.loads(filtering_param)
+                params['filtering'] = filtering
+            except json.JSONDecodeError:
+                pass
+        
+        # Fields to fetch
+        fields = [
+            'campaign_id',
+            'campaign_name',
+            'adset_id',
+            'adset_name',
+            'ad_id',
+            'ad_name',
+            'spend',
+            'impressions',
+            'clicks',
+            'ctr',
+            'cpc',
+            'cpm',
+            'reach',
+            'frequency',
+            'actions',
+            'date_start',
+            'date_stop'
+        ]
+        
+        # Get insights
+        insights = account.get_insights(
+            fields=fields,
+            params=params
+        )
+        
+        # Process results
+        data = []
+        total_spend = 0
+        total_impressions = 0
+        total_reach = 0
+        total_clicks = 0
+        total_results = 0
+        
+        for insight in insights:
+            insight_dict = dict(insight)
+            data.append(insight_dict)
+            
+            # Calculate totals
+            total_spend += float(insight_dict.get('spend', 0))
+            total_impressions += int(insight_dict.get('impressions', 0))
+            total_reach += int(insight_dict.get('reach', 0))
+            total_clicks += int(insight_dict.get('clicks', 0))
+            
+            # Count results from actions
+            if 'actions' in insight_dict:
+                for action in insight_dict['actions']:
+                    if action.get('action_type') in ['onsite_conversion.messaging_first_reply', 
+                                                       'onsite_conversion.total_messaging_connection']:
+                        total_results += int(action.get('value', 0))
+        
+        # Build response
+        response = {
+            'success': True,
+            'level': level,
+            'date_preset': date_preset if not time_range else None,
+            'time_range': {'since': since, 'until': until},
+            'data': data,
+            'summary': {
+                'total_spend': total_spend,
+                'total_impressions': total_impressions,
+                'total_reach': total_reach,
+                'total_clicks': total_clicks,
+                'total_results': total_results
+            },
+            'paging': None,
+            'timestamp': datetime.now().isoformat()
+        }
+        
+        return jsonify(response)
+        
+    except Exception as e:
+        error_message = str(e)
+        print(f"❌ Error in /api/facebook-ads-campaigns: {error_message}")
+        traceback.print_exc()
+        
+        return jsonify({
+            'success': False,
+            'error': error_message,
+            'data': [],
+            'timestamp': datetime.now().isoformat()
+        }), 500
+
+
+# ========================================
+# Google Sheets Data API (เคสได้ชื่อเบอร์)
+# ========================================
+
+@app.route('/api/google-sheets-data', methods=['GET'])
+def get_google_sheets_data():
+    """
+    Get data from Google Sheets 'เคสได้ชื่อเบอร์' sheet
+    
+    Query Parameters:
+    - date_preset: "today" | "yesterday" | "last_7d" | "last_30d" | "this_month" | "last_month"
+    - time_range: JSON string {"since": "YYYY-MM-DD", "until": "YYYY-MM-DD"}
+    - daily: "true" to get daily breakdown
+    """
+    try:
+        # Get query parameters
+        date_preset = request.args.get('date_preset', 'today')
+        time_range_param = request.args.get('time_range')
+        daily = request.args.get('daily', '').lower() == 'true'
+        
+        # Parse time_range if provided
+        time_range = None
+        if time_range_param:
+            try:
+                time_range = json.loads(time_range_param)
+            except json.JSONDecodeError:
+                return jsonify({
+                    'success': False,
+                    'error': 'Invalid time_range format. Expected JSON string.',
+                    'data': []
+                }), 400
+        
+        # Get date range
+        since, until = get_date_range(date_preset, time_range)
+        
+        # Get spreadsheet ID from environment
+        spreadsheet_id = os.getenv('GOOGLE_SHEET_ID') or os.getenv('GOOGLE_SPREADSHEET_ID')
+        if not spreadsheet_id:
+            return jsonify({
+                'success': False,
+                'error': 'GOOGLE_SHEET_ID not set in environment variables',
+                'data': []
+            }), 400
+        
+        print(f"📊 Fetching data from Google Sheets 'เคสได้ชื่อเบอร์': {spreadsheet_id}")
+        
+        # Get Google Sheets client
+        client = get_google_sheets_client()
+        
+        # Open the spreadsheet
+        spreadsheet = client.open_by_key(spreadsheet_id)
+        
+        # Get the 'เคสได้ชื่อเบอร์' sheet
+        sheet = spreadsheet.worksheet('เคสได้ชื่อเบอร์')
+        
+        # Get all values from the sheet
+        all_values = sheet.get_all_values()
+        
+        if not all_values or len(all_values) < 2:
+            return jsonify({
+                'success': True,
+                'total': 0,
+                'dateRange': {'start': since, 'end': until},
+                'hasDateColumn': False,
+                'data': []
+            })
+        
+        # Get headers and data rows
+        headers = all_values[0]
+        data_rows = all_values[1:]
+        
+        # Find date column (column A = index 0)
+        date_col_index = 0
+        has_date_column = len(headers) > 0
+        
+        print(f"📋 Headers: {headers}")
+        print(f"📝 Sample row: {data_rows[0] if data_rows else 'No data'}")
+        
+        # Parse dates and filter
+        filtered_data = []
+        daily_counts = {}
+        
+        since_date = datetime.strptime(since, '%Y-%m-%d')
+        until_date = datetime.strptime(until, '%Y-%m-%d')
+        
+        for row in data_rows:
+            if len(row) <= date_col_index:
+                continue
+            
+            date_str = row[date_col_index].strip()
+            if not date_str:
+                continue
+            
+            # Parse date (support DD/MM/YYYY or YYYY-MM-DD)
+            try:
+                if '/' in date_str:
+                    # DD/MM/YYYY format
+                    parts = date_str.split('/')
+                    if len(parts) == 3:
+                        day, month, year = int(parts[0]), int(parts[1]), int(parts[2])
+                        row_date = datetime(year, month, day)
+                    else:
+                        continue
+                else:
+                    # YYYY-MM-DD format
+                    row_date = datetime.strptime(date_str, '%Y-%m-%d')
+                
+                # Filter by date range
+                if since_date <= row_date <= until_date:
+                    filtered_data.append({
+                        'date': date_str,
+                        'namePhone': row[1] if len(row) > 1 else ''
+                    })
+                    
+                    # Count by date for daily breakdown
+                    date_key = row_date.strftime('%Y-%m-%d')
+                    daily_counts[date_key] = daily_counts.get(date_key, 0) + 1
+                    
+            except (ValueError, IndexError):
+                continue
+        
+        # Build response
+        if daily:
+            # Daily breakdown response
+            daily_data = [{'date': date, 'count': count} 
+                         for date, count in sorted(daily_counts.items(), reverse=True)]
+            
+            response = {
+                'success': True,
+                'dailyData': daily_data,
+                'total': len(filtered_data),
+                'dateRange': {'start': since, 'end': until},
+                'timestamp': datetime.now().isoformat()
+            }
+        else:
+            # Standard response
+            response = {
+                'success': True,
+                'total': len(filtered_data),
+                'dateRange': {'start': since, 'end': until},
+                'dateColIndex': date_col_index,
+                'hasDateColumn': has_date_column,
+                'totalRowsBeforeFilter': len(data_rows),
+                'rowsAfterDateFilter': len(filtered_data),
+                'data': filtered_data,
+                'timestamp': datetime.now().isoformat()
+            }
+        
+        print(f"✅ Successfully fetched {len(filtered_data)} records from 'เคสได้ชื่อเบอร์' sheet")
+        
+        return jsonify(response)
+        
+    except gspread.exceptions.WorksheetNotFound:
+        print("❌ Worksheet 'เคสได้ชื่อเบอร์' not found")
+        return jsonify({
+            'success': False,
+            'error': "Worksheet 'เคสได้ชื่อเบอร์' not found in spreadsheet",
+            'data': []
+        }), 404
+        
+    except Exception as e:
+        error_message = str(e)
+        print(f"❌ Error in /api/google-sheets-data: {error_message}")
+        traceback.print_exc()
+        
+        return jsonify({
+            'success': False,
+            'error': error_message,
+            'data': [],
+            'timestamp': datetime.now().isoformat()
+        }), 500
+
+
+# ========================================
+# Google Ads API
+# ========================================
+
+@app.route('/api/google-ads', methods=['GET'])
+def get_google_ads():
+    """
+    Get Google Ads data
+    
+    Query Parameters:
+    - startDate: Start date (YYYY-MM-DD) default: today
+    - endDate: End date (YYYY-MM-DD) default: today
+    - daily: "true" to get daily breakdown
+    """
+    try:
+        # Get query parameters
+        start_date = request.args.get('startDate', datetime.now().strftime('%Y-%m-%d'))
+        end_date = request.args.get('endDate', datetime.now().strftime('%Y-%m-%d'))
+        daily = request.args.get('daily', '').lower() == 'true'
+        
+        # Get environment variables
+        client_id = os.getenv('GOOGLE_ADS_CLIENT_ID')
+        client_secret = os.getenv('GOOGLE_ADS_CLIENT_SECRET')
+        developer_token = os.getenv('GOOGLE_ADS_DEVELOPER_TOKEN')
+        refresh_token = os.getenv('GOOGLE_ADS_REFRESH_TOKEN')
+        customer_id = os.getenv('GOOGLE_ADS_CUSTOMER_ID')
+        
+        if not all([client_id, client_secret, developer_token, refresh_token, customer_id]):
+            return jsonify({
+                'success': False,
+                'error': 'Missing Google Ads credentials. Please check environment variables.',
+                'campaigns': []
+            }), 400
+        
+        # Remove hyphens from customer_id if present
+        customer_id = customer_id.replace('-', '')
+        
+        # Create Google Ads client configuration
+        credentials = {
+            'developer_token': developer_token,
+            'client_id': client_id,
+            'client_secret': client_secret,
+            'refresh_token': refresh_token,
+            'use_proto_plus': True
+        }
+        
+        # Initialize Google Ads client
+        client = GoogleAdsClient.load_from_dict(credentials)
+        ga_service = client.get_service('GoogleAdsService')
+        
+        # Build query
+        if daily:
+            # Daily breakdown query
+            query = f"""
+                SELECT
+                    segments.date,
+                    metrics.clicks,
+                    metrics.impressions,
+                    metrics.average_cpc,
+                    metrics.cost_micros,
+                    metrics.ctr,
+                    metrics.conversions
+                FROM campaign
+                WHERE segments.date BETWEEN '{start_date}' AND '{end_date}'
+                ORDER BY segments.date DESC
+            """
+        else:
+            # Campaign-level query
+            query = f"""
+                SELECT
+                    campaign.id,
+                    campaign.name,
+                    campaign.status,
+                    metrics.clicks,
+                    metrics.impressions,
+                    metrics.average_cpc,
+                    metrics.cost_micros,
+                    metrics.ctr,
+                    metrics.conversions
+                FROM campaign
+                WHERE segments.date BETWEEN '{start_date}' AND '{end_date}'
+            """
+        
+        # Execute query
+        response = ga_service.search(customer_id=customer_id, query=query)
+        
+        # Process results
+        if daily:
+            # Daily breakdown
+            daily_data = {}
+            
+            for row in response:
+                date = row.segments.date
+                
+                if date not in daily_data:
+                    daily_data[date] = {
+                        'date': date,
+                        'clicks': 0,
+                        'impressions': 0,
+                        'cost': 0,
+                        'conversions': 0
+                    }
+                
+                daily_data[date]['clicks'] += row.metrics.clicks
+                daily_data[date]['impressions'] += row.metrics.impressions
+                daily_data[date]['cost'] += row.metrics.cost_micros / 1000000
+                daily_data[date]['conversions'] += row.metrics.conversions
+            
+            daily_list = sorted(daily_data.values(), key=lambda x: x['date'], reverse=True)
+            
+            result = {
+                'success': True,
+                'dailyData': daily_list,
+                'dateRange': {
+                    'startDate': start_date,
+                    'endDate': end_date
+                },
+                'timestamp': datetime.now().isoformat()
+            }
+        else:
+            # Campaign-level
+            campaigns = []
+            total_clicks = 0
+            total_impressions = 0
+            total_cost = 0
+            
+            for row in response:
+                campaign = row.campaign
+                metrics = row.metrics
+                
+                clicks = metrics.clicks
+                impressions = metrics.impressions
+                cost = metrics.cost_micros / 1000000
+                average_cpc = metrics.average_cpc / 1000000 if metrics.average_cpc else 0
+                ctr = metrics.ctr * 100 if metrics.ctr else 0
+                conversions = metrics.conversions
+                
+                campaigns.append({
+                    'id': str(campaign.id),
+                    'name': campaign.name,
+                    'status': campaign.status.name,
+                    'clicks': clicks,
+                    'impressions': impressions,
+                    'averageCpc': round(average_cpc, 2),
+                    'cost': round(cost, 2),
+                    'ctr': round(ctr, 2),
+                    'conversions': conversions
+                })
+                
+                total_clicks += clicks
+                total_impressions += impressions
+                total_cost += cost
+            
+            avg_cpc = (total_cost / total_clicks) if total_clicks > 0 else 0
+            avg_ctr = (total_clicks / total_impressions * 100) if total_impressions > 0 else 0
+            
+            result = {
+                'campaigns': campaigns,
+                'summary': {
+                    'totalClicks': total_clicks,
+                    'totalImpressions': total_impressions,
+                    'averageCpc': round(avg_cpc, 2),
+                    'totalCost': round(total_cost, 2),
+                    'averageCtr': round(avg_ctr, 2)
+                },
+                'dateRange': {
+                    'startDate': start_date,
+                    'endDate': end_date
+                },
+                'timestamp': datetime.now().isoformat()
+            }
+        
+        return jsonify(result)
+        
+    except GoogleAdsException as ex:
+        error_message = f"Google Ads API error: {ex.error.message}"
+        print(f"❌ {error_message}")
+        traceback.print_exc()
+        
+        return jsonify({
+            'success': False,
+            'error': error_message,
+            'campaigns': [],
+            'timestamp': datetime.now().isoformat()
+        }), 500
+        
+    except Exception as e:
+        error_message = str(e)
+        print(f"❌ Error in /api/google-ads: {error_message}")
+        traceback.print_exc()
+        
+        return jsonify({
+            'success': False,
+            'error': error_message,
+            'campaigns': [],
+            'timestamp': datetime.now().isoformat()
+        }), 500
+
+
 @app.errorhandler(404)
 def not_found(error):
     """Handle 404 errors"""
@@ -701,7 +1274,10 @@ def not_found(error):
             '/api/film-data',
             '/api/google-sheets/film-data',
             '/run-time',
-            '/api/clear-cache'
+            '/api/clear-cache',
+            '/api/facebook-ads-campaigns',
+            '/api/google-sheets-data',
+            '/api/google-ads'
         ]
     }), 404
 
