@@ -451,34 +451,41 @@ def get_google_sheets_all_data():
 def get_run_time():
     """Get call statistics from 'สรุป call_AI' sheet for callers 101-108 mapped with time slots"""
     try:
+        # Get query parameters - ใช้วันที่ปัจจุบันเป็นค่าเริ่มต้น
+        date_param = request.args.get('date', datetime.now().strftime('%Y-%m-%d'))
+        
         # Fetch data from สรุป call_AI sheet
         data = fetch_call_ai_data()
         
         # Define target callers (101-108)
         target_callers = ['101', '102', '103', '104', '105', '106', '107', '108']
         
-        # Define time slots mapping
+        # Define time slots mapping (ตรงกับ callTableTimeSlots ใน React)
         time_slots = [
-            {"label": "9:00-10:00", "start": 9, "end": 10},
-            {"label": "10:00-11:00", "start": 10, "end": 11},
-            {"label": "11:00-12:00", "start": 11, "end": 12},
-            {"label": "12:00-13:00", "start": 12, "end": 13},
-            {"label": "13:00-14:00", "start": 13, "end": 14},
-            {"label": "14:00-15:00", "start": 14, "end": 15},
-            {"label": "15:00-16:00", "start": 15, "end": 16},
-            {"label": "16:00-17:00", "start": 16, "end": 17},
-            {"label": "17:00-18:00", "start": 17, "end": 18},
-            {"label": "18:00-19:00", "start": 18, "end": 19},
-            {"label": "19:00-20:00", "start": 19, "end": 20},
+            {"label": "9:00-10:00", "start": "9", "hour_start": 9, "hour_end": 10},
+            {"label": "10:00-11:00", "start": "10", "hour_start": 10, "hour_end": 11},
+            {"label": "11:00-12:00", "start": "11", "hour_start": 11, "hour_end": 12},
+            {"label": "12:00-13:00", "start": "12", "hour_start": 12, "hour_end": 13},
+            {"label": "13:00-14:00", "start": "13", "hour_start": 13, "hour_end": 14},
+            {"label": "14:00-15:00", "start": "14", "hour_start": 14, "hour_end": 15},
+            {"label": "15:00-16:00", "start": "15", "hour_start": 15, "hour_end": 16},
+            {"label": "16:00-17:00", "start": "16", "hour_start": 16, "hour_end": 17},
+            {"label": "17:00-18:00", "start": "17", "hour_start": 17, "hour_end": 18},
+            {"label": "18:00-19:00", "start": "18", "hour_start": 18, "hour_end": 19},
+            {"label": "19:00-20:00", "start": "19", "hour_start": 19, "hour_end": 20},
         ]
         
-        # Initialize result structure: time_slot -> caller -> count
-        time_slot_stats = {}
+        # Initialize result structure: time_slot (start) -> agent -> count
+        slot_counts = {}
         for slot in time_slots:
-            slot_label = slot['label']
-            time_slot_stats[slot_label] = {}
+            slot_counts[slot['start']] = {}
             for caller in target_callers:
-                time_slot_stats[slot_label][caller] = 0
+                slot_counts[slot['start']][caller] = 0
+        
+        # Initialize totals per agent
+        agent_totals = {}
+        for caller in target_callers:
+            agent_totals[caller] = 0
         
         # Minimum duration threshold: 30 minutes = 1800 seconds
         MIN_DURATION_SECONDS = 1800  # 0:30:00
@@ -500,6 +507,12 @@ def get_run_time():
             if duration_seconds <= MIN_DURATION_SECONDS:
                 continue
             
+            # Filter by date if provided
+            if date_param and ' ' in start_datetime:
+                call_date = start_datetime.split(' ')[0]
+                if call_date != date_param:
+                    continue
+            
             # Extract hour from start datetime
             if ' ' in start_datetime:
                 time_part = start_datetime.split(' ')[1] if len(start_datetime.split(' ')) > 1 else ''
@@ -509,43 +522,39 @@ def get_run_time():
                         
                         # Find matching time slot
                         for slot in time_slots:
-                            if slot['start'] <= hour < slot['end']:
-                                time_slot_stats[slot['label']][caller] += 1
+                            if slot['hour_start'] <= hour < slot['hour_end']:
+                                slot_counts[slot['start']][caller] += 1
+                                agent_totals[caller] += 1
                                 break
                     except (ValueError, IndexError):
                         continue  # Skip if time parsing fails
         
-        # Convert to result format
-        result = []
-        for slot in time_slots:
-            slot_label = slot['label']
-            callers_data = []
-            
-            for caller in target_callers:
-                callers_data.append({
-                    'caller_id': caller,
-                    'call_count': time_slot_stats[slot_label][caller]
-                })
-            
-            result.append({
-                'time_slot': slot_label,
-                'callers': callers_data,
-                'total_calls_in_slot': sum(time_slot_stats[slot_label].values())
-            })
-        
-        # Build response
+        # Build response in format expected by React
+        # Format: { "9": { "101": 5, "102": 3, ... }, "10": { ... }, totals: { "101": 50, ... } }
         response_data = {
             'success': True,
-            'data': result,
+            'timeSlots': [],
+            'slotCounts': slot_counts,  # สำหรับใช้ใน getCallTableValue
+            'totals': agent_totals,     # จำนวนรวมต่อ agent
             'timestamp': datetime.now().isoformat(),
             'source': 'Google Sheets (สรุป call_AI)',
             'filter_criteria': {
                 'callers': target_callers,
                 'min_duration': '0:30:00',
                 'min_duration_seconds': MIN_DURATION_SECONDS,
-                'time_slots_count': len(time_slots)
+                'time_slots_count': len(time_slots),
+                'date': date_param if date_param else 'all'
             }
         }
+        
+        # Add timeSlots array for detailed view
+        for slot in time_slots:
+            response_data['timeSlots'].append({
+                'label': slot['label'],
+                'hourStart': slot['start'],
+                'key': slot['start'],
+                'agentCounts': slot_counts[slot['start']]
+            })
         
         return jsonify(response_data)
         
