@@ -156,6 +156,82 @@ def fetch_film_data():
         raise
 
 
+def fetch_call_ai_data():
+    """Fetch data from Google Sheets 'สรุป call_AI' sheet"""
+    try:
+        # Get spreadsheet ID from environment
+        spreadsheet_id = os.getenv('GOOGLE_SPREADSHEET_ID')
+        if not spreadsheet_id:
+            raise ValueError("GOOGLE_SPREADSHEET_ID not set in environment variables")
+
+        print(f"📊 Fetching data from สรุป call_AI sheet: {spreadsheet_id}")
+
+        # Get Google Sheets client
+        client = get_google_sheets_client()
+
+        # Open the spreadsheet
+        spreadsheet = client.open_by_key(spreadsheet_id)
+
+        # Get the 'สรุป call_AI' sheet
+        sheet = spreadsheet.worksheet('สรุป call_AI')
+
+        # Get all values from the sheet
+        all_values = sheet.get_all_values()
+
+        if not all_values:
+            return []
+
+        # First row is header
+        headers = all_values[0]
+        data_rows = all_values[1:]
+
+        # Convert to list of dictionaries
+        result = []
+        for idx, row in enumerate(data_rows, start=2):  # Start from row 2 (1-indexed)
+            # Create dictionary with headers as keys
+            row_dict = {}
+            for col_idx, header in enumerate(headers):
+                value = row[col_idx] if col_idx < len(row) else ''
+                row_dict[header] = value
+
+            result.append(row_dict)
+
+        print(f"✅ Successfully fetched {len(result)} records from สรุป call_AI sheet")
+        return result
+
+    except gspread.exceptions.WorksheetNotFound:
+        print("❌ Worksheet 'สรุป call_AI' not found")
+        raise ValueError("Worksheet 'สรุป call_AI' not found in spreadsheet")
+    except gspread.exceptions.SpreadsheetNotFound:
+        print("❌ Spreadsheet not found")
+        raise ValueError("Spreadsheet not found. Check GOOGLE_SPREADSHEET_ID and service account permissions")
+    except Exception as e:
+        print(f"❌ Error fetching data: {e}")
+        traceback.print_exc()
+        raise
+
+
+def parse_duration_to_seconds(duration_str):
+    """Parse duration string (H:MM:SS or MM:SS) to total seconds"""
+    try:
+        if not duration_str or duration_str.strip() == '':
+            return 0
+        
+        parts = duration_str.strip().split(':')
+        
+        if len(parts) == 3:  # H:MM:SS
+            hours, minutes, seconds = map(int, parts)
+            return hours * 3600 + minutes * 60 + seconds
+        elif len(parts) == 2:  # MM:SS
+            minutes, seconds = map(int, parts)
+            return minutes * 60 + seconds
+        else:
+            return 0
+            
+    except (ValueError, AttributeError):
+        return 0
+
+
 def cache_data(func):
     """Decorator to cache data for specified duration"""
     @wraps(func)
@@ -197,6 +273,7 @@ def index():
             '/film-data': 'Get all raw data from Film data sheet (all columns and rows)',
             '/api/film-data': 'Get surgery schedule data from Google Sheets',
             '/api/google-sheets/film-data': 'Get all raw data from Film data sheet (all columns and rows)',
+            '/run-time': 'Get call statistics from สรุป call_AI sheet mapped by time slots (9:00-20:00) for callers 101-108',
             '/api/clear-cache': 'Clear data cache (POST)'
         }
     })
@@ -370,6 +447,129 @@ def get_google_sheets_all_data():
         }), 500
 
 
+@app.route('/run-time', methods=['GET'])
+def get_run_time():
+    """Get call statistics from 'สรุป call_AI' sheet for callers 101-108 mapped with time slots"""
+    try:
+        # Fetch data from สรุป call_AI sheet
+        data = fetch_call_ai_data()
+        
+        # Define target callers (101-108)
+        target_callers = ['101', '102', '103', '104', '105', '106', '107', '108']
+        
+        # Define time slots mapping
+        time_slots = [
+            {"label": "9:00-10:00", "start": 9, "end": 10},
+            {"label": "10:00-11:00", "start": 10, "end": 11},
+            {"label": "11:00-12:00", "start": 11, "end": 12},
+            {"label": "12:00-13:00", "start": 12, "end": 13},
+            {"label": "13:00-14:00", "start": 13, "end": 14},
+            {"label": "14:00-15:00", "start": 14, "end": 15},
+            {"label": "15:00-16:00", "start": 15, "end": 16},
+            {"label": "16:00-17:00", "start": 16, "end": 17},
+            {"label": "17:00-18:00", "start": 17, "end": 18},
+            {"label": "18:00-19:00", "start": 18, "end": 19},
+            {"label": "19:00-20:00", "start": 19, "end": 20},
+        ]
+        
+        # Initialize result structure: time_slot -> caller -> count
+        time_slot_stats = {}
+        for slot in time_slots:
+            slot_label = slot['label']
+            time_slot_stats[slot_label] = {}
+            for caller in target_callers:
+                time_slot_stats[slot_label][caller] = 0
+        
+        # Minimum duration threshold: 30 minutes = 1800 seconds
+        MIN_DURATION_SECONDS = 1800  # 0:30:00
+        
+        # Process each row
+        for row in data:
+            caller = row.get('ผู้โทร', '').strip()
+            start_datetime = row.get('start', '').strip()
+            duration_str = row.get('สรุปเวลา', '').strip()
+            
+            # Check if caller is in target range
+            if caller not in target_callers:
+                continue
+            
+            # Parse duration
+            duration_seconds = parse_duration_to_seconds(duration_str)
+            
+            # Only count if duration > 30 minutes
+            if duration_seconds <= MIN_DURATION_SECONDS:
+                continue
+            
+            # Extract hour from start datetime
+            if ' ' in start_datetime:
+                time_part = start_datetime.split(' ')[1] if len(start_datetime.split(' ')) > 1 else ''
+                if time_part:
+                    try:
+                        hour = int(time_part.split(':')[0])
+                        
+                        # Find matching time slot
+                        for slot in time_slots:
+                            if slot['start'] <= hour < slot['end']:
+                                time_slot_stats[slot['label']][caller] += 1
+                                break
+                    except (ValueError, IndexError):
+                        continue  # Skip if time parsing fails
+        
+        # Convert to result format
+        result = []
+        for slot in time_slots:
+            slot_label = slot['label']
+            callers_data = []
+            
+            for caller in target_callers:
+                callers_data.append({
+                    'caller_id': caller,
+                    'call_count': time_slot_stats[slot_label][caller]
+                })
+            
+            result.append({
+                'time_slot': slot_label,
+                'callers': callers_data,
+                'total_calls_in_slot': sum(time_slot_stats[slot_label].values())
+            })
+        
+        # Build response
+        response_data = {
+            'success': True,
+            'data': result,
+            'timestamp': datetime.now().isoformat(),
+            'source': 'Google Sheets (สรุป call_AI)',
+            'filter_criteria': {
+                'callers': target_callers,
+                'min_duration': '0:30:00',
+                'min_duration_seconds': MIN_DURATION_SECONDS,
+                'time_slots_count': len(time_slots)
+            }
+        }
+        
+        return jsonify(response_data)
+        
+    except ValueError as e:
+        return jsonify({
+            'success': False,
+            'error': str(e),
+            'data': [],
+            'timestamp': datetime.now().isoformat()
+        }), 400
+        
+    except Exception as e:
+        error_message = str(e)
+        print(f"❌ Error in /run-time: {error_message}")
+        traceback.print_exc()
+        
+        return jsonify({
+            'success': False,
+            'error': error_message,
+            'data': [],
+            'timestamp': datetime.now().isoformat()
+        }), 500
+
+
 @app.route('/api/clear-cache', methods=['POST'])
 def clear_cache():
     """Clear the data cache"""
@@ -399,6 +599,7 @@ def not_found(error):
             '/film-data',
             '/api/film-data',
             '/api/google-sheets/film-data',
+            '/run-time',
             '/api/clear-cache'
         ]
     }), 404
