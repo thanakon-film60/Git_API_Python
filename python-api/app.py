@@ -330,6 +330,7 @@ def index():
             '/api/film-data': 'Get surgery schedule data from Google Sheets',
             '/api/google-sheets/film-data': 'Get all raw data from Film data sheet (all columns and rows)',
             '/run-time': 'Get call statistics from สรุป call_AI sheet mapped by time slots (9:00-20:00) for callers 101-108',
+            '/N_SaleIncentive_data': 'Get sale incentive data from N_SaleIncentive sheet (supports month/year filtering) (GET)',
             '/api/clear-cache': 'Clear data cache (POST)',
             '/api/facebook-ads-campaigns': 'Get Facebook Ads campaigns data (GET)',
             '/api/google-sheets-data': 'Get Google Sheets data from เคสได้ชื่อเบอร์ sheet (GET)',
@@ -1066,20 +1067,148 @@ def get_google_sheets_data():
 # Google Ads API
 # ========================================
 
+@app.route('/N_SaleIncentive_data', methods=['GET'])
+def get_n_sale_incentive_data():
+    """
+    Get data from N_SaleIncentive sheet
+    
+    Query Parameters:
+    - month: เดือน (1-12) - optional
+    - year: ปี (เช่น 2025) - optional
+    
+    If month and year are provided, returns filtered data for that month.
+    Otherwise, returns all data.
+    """
+    try:
+        # Get query parameters
+        month_param = request.args.get('month')
+        year_param = request.args.get('year')
+        
+        # Get spreadsheet ID from environment
+        spreadsheet_id = os.getenv('GOOGLE_SPREADSHEET_ID')
+        if not spreadsheet_id:
+            raise ValueError("GOOGLE_SPREADSHEET_ID not set in environment variables")
+        
+        print(f"📊 Fetching data from N_SaleIncentive sheet: {spreadsheet_id}")
+        
+        # Get Google Sheets client
+        client = get_google_sheets_client()
+        
+        # Open the spreadsheet
+        spreadsheet = client.open_by_key(spreadsheet_id)
+        
+        # Get the 'N_SaleIncentive' sheet
+        worksheet = spreadsheet.worksheet('N_SaleIncentive')
+        
+        # Get all records
+        records = worksheet.get_all_records()
+        
+        print(f"📋 Total records from N_SaleIncentive: {len(records)}")
+        
+        # Process data
+        sale_data = []
+        for record in records:
+            try:
+                # Get fields from record
+                sale_date_str = record.get('SaleDate', '').strip()
+                if not sale_date_str:
+                    continue  # Skip records without date
+                
+                # Parse SaleDate (format: "2025-11-09 10:06:11")
+                try:
+                    sale_date = datetime.strptime(sale_date_str, '%Y-%m-%d %H:%M:%S').date()
+                except ValueError:
+                    # Try alternative format without time
+                    try:
+                        sale_date = datetime.strptime(sale_date_str, '%Y-%m-%d').date()
+                    except ValueError:
+                        print(f"⚠️ Invalid date format: {sale_date_str}")
+                        continue
+                
+                # Get Sale person and Income
+                sale_person = record.get('Sale', '').strip()
+                income_str = record.get('InCome', '0')
+                
+                # Convert income to float
+                try:
+                    income = float(income_str) if income_str else 0
+                except ValueError:
+                    income = 0
+                
+                # Filter by month and year if provided
+                if month_param and year_param:
+                    month = int(month_param)
+                    year = int(year_param)
+                    
+                    if sale_date.month != month or sale_date.year != year:
+                        continue  # Skip records that don't match the filter
+                
+                # Add to result
+                sale_data.append({
+                    'sale_person': sale_person,
+                    'sale_date': sale_date.isoformat(),  # Format: "2025-11-09"
+                    'income': income,
+                    'day': sale_date.day,
+                    'month': sale_date.month,
+                    'year': sale_date.year
+                })
+                
+            except Exception as e:
+                print(f"⚠️ Error processing record: {e}")
+                continue
+        
+        # Build response
+        response = {
+            'success': True,
+            'data': sale_data,
+            'total_records': len(sale_data),
+            'timestamp': datetime.now().isoformat(),
+            'source': 'Google Sheets (N_SaleIncentive)'
+        }
+        
+        # Add filter info if filtering was applied
+        if month_param and year_param:
+            response['filter'] = {
+                'month': int(month_param),
+                'year': int(year_param)
+            }
+        
+        print(f"✅ Successfully processed {len(sale_data)} records from N_SaleIncentive")
+        
+        return jsonify(response)
+        
+    except gspread.exceptions.WorksheetNotFound:
+        print("❌ Worksheet 'N_SaleIncentive' not found")
+        return jsonify({
+            'success': False,
+            'error': "Worksheet 'N_SaleIncentive' not found in spreadsheet",
+            'data': [],
+            'timestamp': datetime.now().isoformat()
+        }), 404
+        
+    except ValueError as e:
+        return jsonify({
+            'success': False,
+            'error': str(e),
+            'data': [],
+            'timestamp': datetime.now().isoformat()
+        }), 400
+        
+    except Exception as e:
+        error_message = str(e)
+        print(f"❌ Error in /N_SaleIncentive_data: {error_message}")
+        traceback.print_exc()
+        
+        return jsonify({
+            'success': False,
+            'error': error_message,
+            'data': [],
+            'timestamp': datetime.now().isoformat()
+        }), 500
+
+
 @app.route('/api/google-ads', methods=['GET'])
 def get_google_ads():
-    """
-    TEMPORARILY DISABLED - Google Ads API requires approved Developer Token
-    """
-    return jsonify({
-        'success': False,
-        'error': 'Google Ads API is temporarily disabled. Developer Token requires approval from Google (1-2 days). Please use Facebook Ads and Google Sheets APIs for now.',
-        'status': 'pending_approval',
-        'timestamp': datetime.now().isoformat()
-    }), 503
-
-@app.route('/api/google-ads-original', methods=['GET'])
-def get_google_ads_original():
     """
     Get Google Ads data
     
@@ -1121,18 +1250,18 @@ def get_google_ads_original():
             'use_cloud_org_for_api_access': False
         }
         
-        # Initialize Google Ads client
+        # Initialize Google Ads client with v13 (compatible with google-ads 22.0.0)
         client = GoogleAdsClient.load_from_dict(credentials)
-        ga_service = client.get_service('GoogleAdsService', version='v14')
+        ga_service = client.get_service('GoogleAdsService', version='v13')
         
         # Convert dates to YYYYMMDD format (required by Google Ads API)
         start_date_formatted = start_date.replace('-', '')
         end_date_formatted = end_date.replace('-', '')
         
-        # Build query - use simple format without WHERE for testing
+        # Build query - simplified for v13
         if daily:
             # Daily breakdown query
-            query = """
+            query = f"""
                 SELECT
                     campaign.id,
                     campaign.name,
@@ -1141,12 +1270,13 @@ def get_google_ads_original():
                     metrics.impressions,
                     metrics.cost_micros
                 FROM campaign
-                WHERE segments.date DURING LAST_30_DAYS
+                WHERE segments.date >= '{start_date_formatted}'
+                  AND segments.date <= '{end_date_formatted}'
                 ORDER BY segments.date DESC
             """
         else:
             # Campaign-level query
-            query = """
+            query = f"""
                 SELECT
                     campaign.id,
                     campaign.name,
@@ -1155,7 +1285,8 @@ def get_google_ads_original():
                     metrics.impressions,
                     metrics.cost_micros
                 FROM campaign
-                WHERE segments.date DURING LAST_30_DAYS
+                WHERE segments.date >= '{start_date_formatted}'
+                  AND segments.date <= '{end_date_formatted}'
             """
         
         # Execute query
@@ -1287,6 +1418,7 @@ def not_found(error):
             '/api/film-data',
             '/api/google-sheets/film-data',
             '/run-time',
+            '/N_SaleIncentive_data',
             '/api/clear-cache',
             '/api/facebook-ads-campaigns',
             '/api/google-sheets-data',
