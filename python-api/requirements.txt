@@ -8,4 +8,4 @@ python-dotenv==1.0.1
 gunicorn==22.0.0
 requests==2.31.0
 facebook-business==19.0.0
-google-ads==22.0.0
+google-ads==23.1.0

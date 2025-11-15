@@ -1105,44 +1105,45 @@ def get_google_ads():
             'client_id': client_id,
             'client_secret': client_secret,
             'refresh_token': refresh_token,
+            'login_customer_id': customer_id,
             'use_proto_plus': True
         }
         
         # Initialize Google Ads client
         client = GoogleAdsClient.load_from_dict(credentials)
-        ga_service = client.get_service('GoogleAdsService')
+        ga_service = client.get_service('GoogleAdsService', version='v14')
         
-        # Build query
+        # Convert dates to YYYYMMDD format (required by Google Ads API)
+        start_date_formatted = start_date.replace('-', '')
+        end_date_formatted = end_date.replace('-', '')
+        
+        # Build query - use simple format without WHERE for testing
         if daily:
             # Daily breakdown query
-            query = f"""
+            query = """
                 SELECT
+                    campaign.id,
+                    campaign.name,
                     segments.date,
                     metrics.clicks,
                     metrics.impressions,
-                    metrics.average_cpc,
-                    metrics.cost_micros,
-                    metrics.ctr,
-                    metrics.conversions
+                    metrics.cost_micros
                 FROM campaign
-                WHERE segments.date BETWEEN '{start_date}' AND '{end_date}'
+                WHERE segments.date DURING LAST_30_DAYS
                 ORDER BY segments.date DESC
             """
         else:
             # Campaign-level query
-            query = f"""
+            query = """
                 SELECT
                     campaign.id,
                     campaign.name,
                     campaign.status,
                     metrics.clicks,
                     metrics.impressions,
-                    metrics.average_cpc,
-                    metrics.cost_micros,
-                    metrics.ctr,
-                    metrics.conversions
+                    metrics.cost_micros
                 FROM campaign
-                WHERE segments.date BETWEEN '{start_date}' AND '{end_date}'
+                WHERE segments.date DURING LAST_30_DAYS
             """
         
         # Execute query
