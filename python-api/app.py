@@ -1069,6 +1069,18 @@ def get_google_sheets_data():
 @app.route('/api/google-ads', methods=['GET'])
 def get_google_ads():
     """
+    TEMPORARILY DISABLED - Google Ads API requires approved Developer Token
+    """
+    return jsonify({
+        'success': False,
+        'error': 'Google Ads API is temporarily disabled. Developer Token requires approval from Google (1-2 days). Please use Facebook Ads and Google Sheets APIs for now.',
+        'status': 'pending_approval',
+        'timestamp': datetime.now().isoformat()
+    }), 503
+
+@app.route('/api/google-ads-original', methods=['GET'])
+def get_google_ads_original():
+    """
     Get Google Ads data
     
     Query Parameters:
@@ -1105,8 +1117,8 @@ def get_google_ads():
             'client_id': client_id,
             'client_secret': client_secret,
             'refresh_token': refresh_token,
-            'login_customer_id': customer_id,
-            'use_proto_plus': True
+            'use_proto_plus': True,
+            'use_cloud_org_for_api_access': False
         }
         
         # Initialize Google Ads client
