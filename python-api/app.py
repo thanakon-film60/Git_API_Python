@@ -19,6 +19,8 @@ from facebook_business.api import FacebookAdsApi
 from facebook_business.adobjects.adaccount import AdAccount
 from google.ads.googleads.client import GoogleAdsClient
 from google.ads.googleads.errors import GoogleAdsException
+from db_connection import get_db_connection
+from psycopg2 import Error
 
 # Load environment variables
 load_dotenv()
@@ -334,7 +336,8 @@ def index():
             '/api/clear-cache': 'Clear data cache (POST)',
             '/api/facebook-ads-campaigns': 'Get Facebook Ads campaigns data (GET)',
             '/api/google-sheets-data': 'Get Google Sheets data from เคสได้ชื่อเบอร์ sheet (GET)',
-            '/api/google-ads': 'Get Google Ads data (GET)'
+            '/api/google-ads': 'Get Google Ads data (GET)',
+            '/data_bjh': 'Get all leads data from BJH PostgreSQL database (GET)'
         }
     })
 
@@ -1405,6 +1408,134 @@ def get_google_ads():
         }), 500
 
 
+@app.route('/data_bjh', methods=['GET'])
+def get_data_bjh():
+    """
+    Get all leads data from BJH PostgreSQL database
+    
+    Query Parameters:
+    - limit: Maximum number of records to return (optional)
+    - status: Filter by status (optional)
+    - source: Filter by source (optional)
+    - doctor: Filter by doctor (optional)
+    """
+    try:
+        # Get query parameters
+        limit = request.args.get('limit', type=int)
+        status_filter = request.args.get('status')
+        source_filter = request.args.get('source')
+        doctor_filter = request.args.get('doctor')
+        
+        # Get database connection
+        connection = get_db_connection()
+        
+        if not connection:
+            return jsonify({
+                'success': False,
+                'error': 'Failed to connect to database',
+                'data': [],
+                'timestamp': datetime.now().isoformat()
+            }), 500
+        
+        try:
+            cursor = connection.cursor()
+            
+            # Build query with filters
+            query = 'SELECT * FROM "BJH-Server"."bjh_all_leads"'
+            conditions = []
+            params = []
+            
+            if status_filter:
+                conditions.append('status = %s')
+                params.append(status_filter)
+            
+            if source_filter:
+                conditions.append('source = %s')
+                params.append(source_filter)
+            
+            if doctor_filter:
+                conditions.append('doctor = %s')
+                params.append(doctor_filter)
+            
+            if conditions:
+                query += ' WHERE ' + ' AND '.join(conditions)
+            
+            if limit:
+                query += f' LIMIT {limit}'
+            
+            # Execute query
+            cursor.execute(query, params)
+            
+            # Get column names
+            column_names = [desc[0] for desc in cursor.description]
+            
+            # Fetch all results
+            rows = cursor.fetchall()
+            
+            # Convert to list of dictionaries
+            import datetime as dt
+            data = []
+            for row in rows:
+                row_dict = {}
+                for i, col_name in enumerate(column_names):
+                    value = row[i]
+                    # Convert date/datetime objects to string
+                    if isinstance(value, (dt.datetime, dt.date)):
+                        value = value.isoformat()
+                    row_dict[col_name] = value
+                data.append(row_dict)
+            
+            cursor.close()
+            
+            # Build response
+            response = {
+                'success': True,
+                'data': data,
+                'total': len(data),
+                'columns': column_names,
+                'filters': {
+                    'status': status_filter,
+                    'source': source_filter,
+                    'doctor': doctor_filter,
+                    'limit': limit
+                },
+                'timestamp': datetime.now().isoformat(),
+                'source': 'PostgreSQL (BJH-Server.bjh_all_leads)'
+            }
+            
+            print(f"✅ Successfully fetched {len(data)} records from bjh_all_leads")
+            
+            return jsonify(response)
+            
+        except Error as e:
+            error_message = f"Database error: {str(e)}"
+            print(f"❌ {error_message}")
+            traceback.print_exc()
+            
+            return jsonify({
+                'success': False,
+                'error': error_message,
+                'data': [],
+                'timestamp': datetime.now().isoformat()
+            }), 500
+            
+        finally:
+            if connection:
+                connection.close()
+    
+    except Exception as e:
+        error_message = str(e)
+        print(f"❌ Error in /data_bjh: {error_message}")
+        traceback.print_exc()
+        
+        return jsonify({
+            'success': False,
+            'error': error_message,
+            'data': [],
+            'timestamp': datetime.now().isoformat()
+        }), 500
+
+
 @app.errorhandler(404)
 def not_found(error):
     """Handle 404 errors"""
@@ -1422,7 +1553,8 @@ def not_found(error):
             '/api/clear-cache',
             '/api/facebook-ads-campaigns',
             '/api/google-sheets-data',
-            '/api/google-ads'
+            '/api/google-ads',
+            '/data_bjh'
         ]
     }), 404
 
