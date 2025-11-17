@@ -1,5 +1,10 @@
 import psycopg2
 from psycopg2 import Error
+import os
+from dotenv import load_dotenv
+
+# Load environment variables
+load_dotenv()
 
 def get_db_connection():
     """
@@ -7,11 +12,11 @@ def get_db_connection():
     """
     try:
         connection = psycopg2.connect(
-            host="192.168.1.19",
-            port="5432",
-            user="postgres",
-            password="Bjh12345!!",
-            database="postgres"  # เปลี่ยนชื่อ database ตามที่ต้องการ
+            host=os.getenv("DB_HOST", "192.168.1.19"),
+            port=os.getenv("DB_PORT", "5432"),
+            user=os.getenv("DB_USER", "postgres"),
+            password=os.getenv("DB_PASSWORD", "Bjh12345!!"),
+            database=os.getenv("DB_NAME", "postgres")
         )
         print("เชื่อมต่อ PostgreSQL สำเร็จ")
         return connection

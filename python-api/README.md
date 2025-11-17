@@ -65,12 +65,19 @@ npm run dev
 
 ## 📡 API Endpoints
 
-| Endpoint           | Method | คำอธิบาย                       |
-| ------------------ | ------ | ------------------------------ |
-| `/`                | GET    | ข้อมูลเกี่ยวกับ API            |
-| `/health`          | GET    | Health check และ cache status  |
-| `/api/film-data`   | GET    | ดึงข้อมูลจาก Google Sheets     |
-| `/api/clear-cache` | POST   | Clear cache (รีเฟรชข้อมูลใหม่) |
+| Endpoint                      | Method | คำอธิบาย                                                       |
+| ----------------------------- | ------ | -------------------------------------------------------------- |
+| `/`                           | GET    | ข้อมูลเกี่ยวกับ API                                            |
+| `/health`                     | GET    | Health check และ cache status                                  |
+| `/api/film-data`              | GET    | ดึงข้อมูลจาก Google Sheets                                     |
+| `/api/clear-cache`            | POST   | Clear cache (รีเฟรชข้อมูลใหม่)                                 |
+| `/api/facebook-ads-campaigns` | GET    | ดึงข้อมูลจาก Facebook Ads Manager                              |
+| `/api/facebook-ads-manager`   | GET    | Alias สำหรับ Facebook Ads (เหมือน /api/facebook-ads-campaigns) |
+| `/api/google-sheets-data`     | GET    | ดึงข้อมูลจากชีท 'เคสได้ชื่อเบอร์'                              |
+| `/api/google-ads`             | GET    | ดึงข้อมูลจาก Google Ads                                        |
+| `/run-time`                   | GET    | ดึงสถิติการโทรจากชีท 'สรุป call_AI'                            |
+| `/N_SaleIncentive_data`       | GET    | ดึงข้อมูล Sale Incentive                                       |
+| `/data_bjh`                   | GET    | ดึงข้อมูล Leads จากฐานข้อมูล PostgreSQL                        |
 
 ---
 
@@ -268,3 +275,6 @@ python-api/
 
 - `PYTHON_API_RAILWAY_GUIDE.md` - คู่มือ deploy บน Railway
 - `PYTHON_API_SURGERY_SCHEDULE_GUIDE.md` - คู่มือการใช้งานครบวงจร
+- `FACEBOOK_ADS_MANAGER_GUIDE.md` - คู่มือการใช้งาน Facebook Ads Manager API
+- `GOOGLE_ADS_SETUP.md` - คู่มือการตั้งค่า Google Ads API
+- `N_SALE_INCENTIVE_API_GUIDE.md` - คู่มือการใช้งาน Sale Incentive API

@@ -334,7 +334,8 @@ def index():
             '/run-time': 'Get call statistics from สรุป call_AI sheet mapped by time slots (9:00-20:00) for callers 101-108',
             '/N_SaleIncentive_data': 'Get sale incentive data from N_SaleIncentive sheet (supports month/year filtering) (GET)',
             '/api/clear-cache': 'Clear data cache (POST)',
-            '/api/facebook-ads-campaigns': 'Get Facebook Ads campaigns data (GET)',
+            '/api/facebook-ads-campaigns': 'Get Facebook Ads campaigns data (supports level, date filtering, daily breakdown) (GET)',
+            '/api/facebook-ads-manager': 'Alias for /api/facebook-ads-campaigns (GET)',
             '/api/google-sheets-data': 'Get Google Sheets data from เคสได้ชื่อเบอร์ sheet (GET)',
             '/api/google-ads': 'Get Google Ads data (GET)',
             '/data_bjh': 'Get all leads data from BJH PostgreSQL database (GET)'
@@ -741,12 +742,11 @@ def get_facebook_ads_campaigns():
     Get Facebook Ads campaigns data
     
     Query Parameters:
-    - level: "campaign" | "adset" | "ad" (default: "ad")
+    - level: "campaign" | "adset" | "ad" (default: "campaign")
     - date_preset: "today" | "yesterday" | "last_7d" | "last_30d" | "this_month" | "last_month"
     - time_range: JSON string {"since": "YYYY-MM-DD", "until": "YYYY-MM-DD"}
-    - action_breakdowns: "action_type" (default)
-    - filtering: JSON string for filtering
-    - time_increment: "1" for daily breakdown (optional)
+    - time_increment: "1" for daily breakdown, "monthly" for monthly (optional)
+    - fields: Comma-separated list of additional fields (optional)
     """
     try:
         # Get environment variables
@@ -757,16 +757,16 @@ def get_facebook_ads_campaigns():
             return jsonify({
                 'success': False,
                 'error': 'Missing Facebook credentials. Please set FACEBOOK_ACCESS_TOKEN and FACEBOOK_AD_ACCOUNT_ID',
-                'data': []
+                'data': [],
+                'timestamp': datetime.now().isoformat()
             }), 400
         
         # Get query parameters
-        level = request.args.get('level', 'ad')
+        level = request.args.get('level', 'campaign')
         date_preset = request.args.get('date_preset', 'today')
         time_range_param = request.args.get('time_range')
-        action_breakdowns = request.args.get('action_breakdowns', 'action_type')
-        filtering_param = request.args.get('filtering')
         time_increment = request.args.get('time_increment')
+        custom_fields = request.args.get('fields')
         
         # Parse time_range if provided
         time_range = None
@@ -777,11 +777,14 @@ def get_facebook_ads_campaigns():
                 return jsonify({
                     'success': False,
                     'error': 'Invalid time_range format. Expected JSON string.',
-                    'data': []
+                    'data': [],
+                    'timestamp': datetime.now().isoformat()
                 }), 400
         
         # Get date range
         since, until = get_date_range(date_preset, time_range)
+        
+        print(f"📊 Fetching Facebook Ads data for {level} from {since} to {until}")
         
         # Initialize Facebook API
         FacebookAdsApi.init(access_token=access_token)
@@ -793,22 +796,13 @@ def get_facebook_ads_campaigns():
         params = {
             'level': level,
             'time_range': {'since': since, 'until': until},
-            'action_breakdowns': [action_breakdowns] if action_breakdowns else None,
         }
         
         # Add time_increment if specified (for daily breakdown)
         if time_increment:
             params['time_increment'] = time_increment
         
-        # Add filtering if specified
-        if filtering_param:
-            try:
-                filtering = json.loads(filtering_param)
-                params['filtering'] = filtering
-            except json.JSONDecodeError:
-                pass
-        
-        # Fields to fetch
+        # Fields to fetch - comprehensive list
         fields = [
             'campaign_id',
             'campaign_name',
@@ -822,14 +816,27 @@ def get_facebook_ads_campaigns():
             'ctr',
             'cpc',
             'cpm',
+            'cpp',
             'reach',
             'frequency',
             'actions',
+            'action_values',
+            'conversions',
+            'conversion_values',
+            'cost_per_action_type',
+            'cost_per_conversion',
             'date_start',
             'date_stop'
         ]
         
+        # Add custom fields if provided
+        if custom_fields:
+            custom_fields_list = [f.strip() for f in custom_fields.split(',')]
+            fields.extend(custom_fields_list)
+            fields = list(set(fields))  # Remove duplicates
+        
         # Get insights
+        print(f"🔍 Requesting insights with fields: {fields}")
         insights = account.get_insights(
             fields=fields,
             params=params
@@ -841,24 +848,75 @@ def get_facebook_ads_campaigns():
         total_impressions = 0
         total_reach = 0
         total_clicks = 0
-        total_results = 0
+        total_conversions = 0
+        total_leads = 0
+        total_purchase = 0
         
         for insight in insights:
             insight_dict = dict(insight)
+            
+            # Process actions for easier access
+            processed_actions = {}
+            if 'actions' in insight_dict and insight_dict['actions']:
+                for action in insight_dict['actions']:
+                    action_type = action.get('action_type', '')
+                    action_value = int(action.get('value', 0))
+                    processed_actions[action_type] = action_value
+                    
+                    # Count specific action types
+                    if action_type == 'lead':
+                        total_leads += action_value
+                    elif action_type == 'purchase':
+                        total_purchase += action_value
+            
+            # Add processed actions to insight
+            insight_dict['processed_actions'] = processed_actions
+            
+            # Extract key metrics
+            spend = float(insight_dict.get('spend', 0))
+            impressions = int(insight_dict.get('impressions', 0))
+            reach = int(insight_dict.get('reach', 0))
+            clicks = int(insight_dict.get('clicks', 0))
+            
+            # Get conversions (from new conversion field or from actions)
+            conversions = 0
+            if 'conversions' in insight_dict and insight_dict['conversions']:
+                for conv in insight_dict['conversions']:
+                    conversions += float(conv.get('value', 0))
+            else:
+                # Fallback to counting from actions
+                conversions = processed_actions.get('lead', 0) + processed_actions.get('purchase', 0)
+            
+            insight_dict['total_conversions'] = conversions
+            
+            # Add calculated metrics
+            insight_dict['cost_per_result'] = round(spend / conversions, 2) if conversions > 0 else 0
+            
             data.append(insight_dict)
             
             # Calculate totals
-            total_spend += float(insight_dict.get('spend', 0))
-            total_impressions += int(insight_dict.get('impressions', 0))
-            total_reach += int(insight_dict.get('reach', 0))
-            total_clicks += int(insight_dict.get('clicks', 0))
-            
-            # Count results from actions
-            if 'actions' in insight_dict:
-                for action in insight_dict['actions']:
-                    if action.get('action_type') in ['onsite_conversion.messaging_first_reply', 
-                                                       'onsite_conversion.total_messaging_connection']:
-                        total_results += int(action.get('value', 0))
+            total_spend += spend
+            total_impressions += impressions
+            total_reach += reach
+            total_clicks += clicks
+            total_conversions += conversions
+        
+        # Build summary
+        summary = {
+            'total_spend': round(total_spend, 2),
+            'total_impressions': total_impressions,
+            'total_reach': total_reach,
+            'total_clicks': total_clicks,
+            'total_conversions': round(total_conversions, 2),
+            'total_leads': total_leads,
+            'total_purchase': total_purchase,
+            'average_cpc': round(total_spend / total_clicks, 2) if total_clicks > 0 else 0,
+            'average_ctr': round((total_clicks / total_impressions) * 100, 2) if total_impressions > 0 else 0,
+            'cost_per_result': round(total_spend / total_conversions, 2) if total_conversions > 0 else 0,
+            'frequency': round(total_impressions / total_reach, 2) if total_reach > 0 else 0
+        }
+        
+        print(f"✅ Successfully fetched {len(data)} {level}(s) from Facebook Ads")
         
         # Build response
         response = {
@@ -866,15 +924,10 @@ def get_facebook_ads_campaigns():
             'level': level,
             'date_preset': date_preset if not time_range else None,
             'time_range': {'since': since, 'until': until},
+            'time_increment': time_increment,
             'data': data,
-            'summary': {
-                'total_spend': total_spend,
-                'total_impressions': total_impressions,
-                'total_reach': total_reach,
-                'total_clicks': total_clicks,
-                'total_results': total_results
-            },
-            'paging': None,
+            'summary': summary,
+            'total_records': len(data),
             'timestamp': datetime.now().isoformat()
         }
         
@@ -891,6 +944,16 @@ def get_facebook_ads_campaigns():
             'data': [],
             'timestamp': datetime.now().isoformat()
         }), 500
+
+
+# ========================================
+# Facebook Ads Manager API (Alias)
+# ========================================
+
+@app.route('/api/facebook-ads-manager', methods=['GET'])
+def get_facebook_ads_manager():
+    """Alias for /api/facebook-ads-campaigns"""
+    return get_facebook_ads_campaigns()
 
 
 # ========================================
