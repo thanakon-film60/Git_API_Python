@@ -1,0 +1,81 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual Environment
+venv/
+ENV/
+env/
+.venv
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Git
+.git/
+.gitignore
+.gitattributes
+
+# Documentation
+*.md
+!README.md
+RAILWAY_*.md
+DATABASE_*.md
+GOOGLE_ADS_*.md
+N_SALE_*.md
+FACEBOOK_ADS_*.md
+
+# Environment files (should be set in Railway)
+.env
+.env.*
+!.env.example
+
+# Tests
+test_*.py
+tests/
+*.test.py
+
+# Scripts
+scripts/
+*.bat
+*.sh
+
+# Node modules (if any)
+node_modules/
+package.json
+package-lock.json
+
+# Logs
+*.log
+logs/
+
+# Temporary files
+tmp/
+temp/
+*.tmp

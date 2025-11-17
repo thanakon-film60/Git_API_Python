@@ -8,5 +8,8 @@ python-dotenv==1.0.1
 gunicorn==22.0.0
 requests==2.31.0
 facebook-business==20.0.3
-google-ads==21.3.0
+google-ads==22.1.0
+grpcio==1.62.3
+grpcio-status==1.62.3
+protobuf==4.25.8
 psycopg2-binary==2.9.9

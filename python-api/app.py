@@ -1316,9 +1316,9 @@ def get_google_ads():
             'use_cloud_org_for_api_access': False
         }
         
-        # Initialize Google Ads client with v13 (compatible with google-ads 22.0.0)
+        # Initialize Google Ads client with v17 (compatible with google-ads 22.1.0)
         client = GoogleAdsClient.load_from_dict(credentials)
-        ga_service = client.get_service('GoogleAdsService', version='v13')
+        ga_service = client.get_service('GoogleAdsService')
         
         # Convert dates to YYYYMMDD format (required by Google Ads API)
         start_date_formatted = start_date.replace('-', '')

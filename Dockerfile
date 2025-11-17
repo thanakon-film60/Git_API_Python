@@ -7,8 +7,9 @@ WORKDIR /app
 # Copy requirements first for better caching
 COPY python-api/requirements.txt .
 
-# Install dependencies
-RUN pip install --no-cache-dir -r requirements.txt
+# Install dependencies with increased timeout and retry
+RUN pip install --upgrade pip && \
+    pip install --no-cache-dir --default-timeout=300 --retries 5 -r requirements.txt
 
 # Copy application code
 COPY python-api/ .
