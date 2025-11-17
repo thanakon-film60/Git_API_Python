@@ -181,6 +181,7 @@ railway logs
 **สาเหตุ:** Application ไม่ได้รัน
 
 **แก้ไข:**
+
 1. ตรวจสอบ logs ใน Railway
 2. Redeploy ใหม่
 3. ตรวจสอบ Dockerfile
@@ -190,6 +191,7 @@ railway logs
 **สาเหตุ:** Code มี error หรือ environment variables ไม่ครบ
 
 **แก้ไข:**
+
 1. ดู deployment logs
 2. ตรวจสอบ environment variables
 3. ทดสอบใน local ก่อน
@@ -199,6 +201,7 @@ railway logs
 **สาเหตุ:** Access token หมดอายุหรือ invalid
 
 **แก้ไข:**
+
 1. สร้าง Long-Lived Access Token ใหม่
 2. อัปเดทใน Railway Variables
 3. Redeploy
@@ -208,6 +211,7 @@ railway logs
 **สาเหตุ:** Download dependencies นานเกินไป
 
 **แก้ไข:**
+
 1. Redeploy ใหม่ (อาจเป็นปัญหาชั่วคราว)
 2. ตรวจสอบว่า `Dockerfile` มี `--default-timeout=300`
 
@@ -216,11 +220,13 @@ railway logs
 หลังจากแก้ไขสำเร็จ:
 
 ### Root Endpoint:
+
 ```bash
 curl https://believable-ambition-production.up.railway.app/
 ```
 
 **Response:**
+
 ```json
 {
   "status": "ok",
@@ -235,11 +241,13 @@ curl https://believable-ambition-production.up.railway.app/
 ```
 
 ### Facebook Ads Endpoint:
+
 ```bash
 curl https://believable-ambition-production.up.railway.app/api/facebook-ads-campaigns
 ```
 
 **Response:**
+
 ```json
 {
   "success": true,
@@ -262,6 +270,7 @@ curl https://believable-ambition-production.up.railway.app/api/facebook-ads-camp
 ## 💡 Pro Tips
 
 1. **Use Railway CLI** สำหรับ deploy เร็วขึ้น:
+
    ```bash
    npm install -g @railway/cli
    railway login
@@ -269,6 +278,7 @@ curl https://believable-ambition-production.up.railway.app/api/facebook-ads-camp
    ```
 
 2. **Monitor Logs** ตลอดเวลาเพื่อดู errors:
+
    ```bash
    railway logs --follow
    ```
@@ -282,6 +292,7 @@ curl https://believable-ambition-production.up.railway.app/api/facebook-ads-camp
 ## 🆘 Need Help?
 
 ถ้ายังมีปัญหา:
+
 1. ดู Railway deployment logs
 2. ตรวจสอบ GitHub Actions (ถ้ามี)
 3. ทดสอบ local Docker build
