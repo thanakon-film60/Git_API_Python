@@ -5,6 +5,7 @@ This API serves as a backend for the Performance Surgery Schedule system.
 
 from flask import Flask, jsonify, request
 from flask_cors import CORS
+from flask_compress import Compress
 import os
 import sys
 import traceback
@@ -28,6 +29,9 @@ load_dotenv()
 # Initialize Flask app
 app = Flask(__name__)
 
+# Enable response compression (gzip)
+Compress(app)
+
 # Configure CORS for production
 CORS(app, resources={
     r"/api/*": {
@@ -44,6 +48,14 @@ cache = {
     'expires_at': None
 }
 CACHE_DURATION = int(os.getenv('CACHE_DURATION', 30))  # seconds
+
+# Facebook Ads cache (แยกออกมาต่างหาก)
+fb_ads_cache = {
+    'data': {},  # เก็บตาม cache_key
+    'timestamps': {},
+    'expires_at': {}
+}
+FB_ADS_CACHE_DURATION = int(os.getenv('FB_ADS_CACHE_DURATION', 300))  # 5 นาที (300 วินาที)
 
 
 def get_google_sheets_client():
@@ -350,9 +362,15 @@ def health():
         'status': 'healthy',
         'timestamp': datetime.now().isoformat(),
         'cache_status': {
-            'has_data': cache['data'] is not None,
-            'cached_at': cache['timestamp'].isoformat() if cache['timestamp'] else None,
-            'expires_at': cache['expires_at'].isoformat() if cache['expires_at'] else None
+            'google_sheets': {
+                'has_data': cache['data'] is not None,
+                'cached_at': cache['timestamp'].isoformat() if cache['timestamp'] else None,
+                'expires_at': cache['expires_at'].isoformat() if cache['expires_at'] else None
+            },
+            'facebook_ads': {
+                'cached_keys': len(fb_ads_cache['data']),
+                'cache_duration': FB_ADS_CACHE_DURATION
+            }
         }
     })
 
@@ -688,16 +706,21 @@ def get_run_time():
 @app.route('/api/clear-cache', methods=['POST'])
 def clear_cache():
     """Clear the data cache"""
-    global cache
+    global cache, fb_ads_cache
     cache = {
         'data': None,
         'timestamp': None,
         'expires_at': None
     }
+    fb_ads_cache = {
+        'data': {},
+        'timestamps': {},
+        'expires_at': {}
+    }
 
     return jsonify({
         'success': True,
-        'message': 'Cache cleared successfully',
+        'message': 'All caches cleared successfully (Google Sheets + Facebook Ads)',
         'timestamp': datetime.now().isoformat()
     })
 
@@ -739,14 +762,17 @@ def get_date_range(date_preset=None, time_range=None):
 @app.route('/api/facebook-ads-campaigns', methods=['GET'])
 def get_facebook_ads_campaigns():
     """
-    Get Facebook Ads campaigns data
+    Get Facebook Ads campaigns data (Optimized with caching)
     
     Query Parameters:
     - level: "campaign" | "adset" | "ad" (default: "campaign")
     - date_preset: "today" | "yesterday" | "last_7d" | "last_30d" | "this_month" | "last_month"
     - time_range: JSON string {"since": "YYYY-MM-DD", "until": "YYYY-MM-DD"}
     - time_increment: "1" for daily breakdown, "monthly" for monthly (optional)
+    - action_breakdowns: comma-separated (e.g., "action_type")
     - fields: Comma-separated list of additional fields (optional)
+    - limit: Maximum number of records to return (optional, default: 1000)
+    - no_cache: "true" to bypass cache (optional)
     """
     try:
         # Get environment variables
@@ -766,7 +792,10 @@ def get_facebook_ads_campaigns():
         date_preset = request.args.get('date_preset', 'today')
         time_range_param = request.args.get('time_range')
         time_increment = request.args.get('time_increment')
+        action_breakdowns = request.args.get('action_breakdowns')
         custom_fields = request.args.get('fields')
+        limit = request.args.get('limit', type=int, default=1000)
+        no_cache = request.args.get('no_cache', '').lower() == 'true'
         
         # Parse time_range if provided
         time_range = None
@@ -784,6 +813,22 @@ def get_facebook_ads_campaigns():
         # Get date range
         since, until = get_date_range(date_preset, time_range)
         
+        # สร้าง cache key
+        cache_key = f"{level}_{since}_{until}_{time_increment}_{action_breakdowns}_{custom_fields}_{limit}"
+        
+        # ตรวจสอบ cache
+        global fb_ads_cache
+        now = datetime.now()
+        
+        if not no_cache and cache_key in fb_ads_cache['data']:
+            if (cache_key in fb_ads_cache['expires_at'] and 
+                now < fb_ads_cache['expires_at'][cache_key]):
+                cached_response = fb_ads_cache['data'][cache_key]
+                cached_response['cached'] = True
+                cached_response['cache_expires_in'] = (fb_ads_cache['expires_at'][cache_key] - now).seconds
+                print(f"✅ Returning cached Facebook Ads data (expires in {cached_response['cache_expires_in']}s)")
+                return jsonify(cached_response)
+        
         print(f"📊 Fetching Facebook Ads data for {level} from {since} to {until}")
         
         # Initialize Facebook API
@@ -796,38 +841,39 @@ def get_facebook_ads_campaigns():
         params = {
             'level': level,
             'time_range': {'since': since, 'until': until},
+            'limit': limit
         }
         
         # Add time_increment if specified (for daily breakdown)
         if time_increment:
             params['time_increment'] = time_increment
         
-        # Fields to fetch - comprehensive list
+        # Add action_breakdowns if specified
+        if action_breakdowns:
+            params['action_breakdowns'] = [x.strip() for x in action_breakdowns.split(',')]
+        
+        # Fields to fetch - เฉพาะที่จำเป็น (ลดภาระ API)
         fields = [
             'campaign_id',
             'campaign_name',
-            'adset_id',
-            'adset_name',
-            'ad_id',
-            'ad_name',
             'spend',
             'impressions',
             'clicks',
             'ctr',
             'cpc',
             'cpm',
-            'cpp',
             'reach',
-            'frequency',
             'actions',
-            'action_values',
-            'conversions',
-            'conversion_values',
             'cost_per_action_type',
-            'cost_per_conversion',
             'date_start',
             'date_stop'
         ]
+        
+        # เพิ่ม fields ตาม level
+        if level in ['adset', 'ad']:
+            fields.extend(['adset_id', 'adset_name'])
+        if level == 'ad':
+            fields.extend(['ad_id', 'ad_name'])
         
         # Add custom fields if provided
         if custom_fields:
@@ -836,7 +882,7 @@ def get_facebook_ads_campaigns():
             fields = list(set(fields))  # Remove duplicates
         
         # Get insights
-        print(f"🔍 Requesting insights with fields: {fields}")
+        print(f"🔍 Requesting insights with {len(fields)} fields, limit: {limit}")
         insights = account.get_insights(
             fields=fields,
             params=params
@@ -878,15 +924,8 @@ def get_facebook_ads_campaigns():
             reach = int(insight_dict.get('reach', 0))
             clicks = int(insight_dict.get('clicks', 0))
             
-            # Get conversions (from new conversion field or from actions)
-            conversions = 0
-            if 'conversions' in insight_dict and insight_dict['conversions']:
-                for conv in insight_dict['conversions']:
-                    conversions += float(conv.get('value', 0))
-            else:
-                # Fallback to counting from actions
-                conversions = processed_actions.get('lead', 0) + processed_actions.get('purchase', 0)
-            
+            # Get conversions (from actions)
+            conversions = processed_actions.get('lead', 0) + processed_actions.get('purchase', 0)
             insight_dict['total_conversions'] = conversions
             
             # Add calculated metrics
@@ -928,8 +967,15 @@ def get_facebook_ads_campaigns():
             'data': data,
             'summary': summary,
             'total_records': len(data),
-            'timestamp': datetime.now().isoformat()
+            'timestamp': datetime.now().isoformat(),
+            'cached': False,
+            'cache_duration': FB_ADS_CACHE_DURATION
         }
+        
+        # บันทึกลง cache
+        fb_ads_cache['data'][cache_key] = response.copy()
+        fb_ads_cache['timestamps'][cache_key] = now
+        fb_ads_cache['expires_at'][cache_key] = now + timedelta(seconds=FB_ADS_CACHE_DURATION)
         
         return jsonify(response)
         
