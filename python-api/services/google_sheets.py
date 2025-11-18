@@ -64,31 +64,32 @@ class GoogleSheetsService:
         raise ValueError(f"ไม่พบ sheet ที่ต้องการ. ลอง: {sheet_names}. Sheets ที่มี: {available_sheets}")
 
     def _parse_google_sheets_datetime(self, datetime_str):
-        """Parse Google Sheets datetime format (DD/MM/YYYY, HH:MM:SS)"""
+        """Parse Google Sheets datetime format (YYYY-MM-DD HH:MM:SS or YYYY-MM-DD H:MM:SS)"""
         try:
             if not datetime_str or datetime_str.strip() == '':
                 return None
             
-            parts = datetime_str.strip().split(',')
+            # Format: "2025-11-18 9:14:57" หรือ "2025-11-18 09:14:57"
+            parts = datetime_str.strip().split()
             if len(parts) != 2:
                 return None
             
-            date_part = parts[0].strip()  # DD/MM/YYYY
-            time_part = parts[1].strip()  # HH:MM:SS
+            date_part = parts[0].strip()  # YYYY-MM-DD
+            time_part = parts[1].strip()  # H:MM:SS หรือ HH:MM:SS
             
-            # Parse date
-            date_components = date_part.split('/')
+            # Parse date (YYYY-MM-DD)
+            date_components = date_part.split('-')
             if len(date_components) != 3:
                 return None
             
-            day = int(date_components[0])
+            year = int(date_components[0])
             month = int(date_components[1])
-            year = int(date_components[2])
+            day = int(date_components[2])
             
-            # Convert to YYYY-MM-DD
+            # Format date
             formatted_date = f"{year:04d}-{month:02d}-{day:02d}"
             
-            # Parse hour
+            # Parse time (รองรับทั้ง H:MM:SS และ HH:MM:SS)
             time_components = time_part.split(':')
             hour = int(time_components[0]) if time_components else 0
             
@@ -98,7 +99,9 @@ class GoogleSheetsService:
                 'hour': hour,
                 'datetime': datetime_str
             }
-        except:
+        except Exception as e:
+            # Debug: แสดง error ถ้า parse ไม่ได้
+            print(f"Failed to parse datetime: {datetime_str}, Error: {e}")
             return None
 
     def _parse_duration_to_seconds(self, duration_str):
