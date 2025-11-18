@@ -552,14 +552,20 @@ def get_film_data_contacts():
     
     Query Parameters:
     - count: "true" to get count summary by date (optional)
+    - date: "YYYY-MM-DD" to filter by specific date (optional)
+    - today: "true" to filter by today's date (optional)
     
     Example:
         GET /api/film-data-contacts
         GET /api/film-data-contacts?count=true
+        GET /api/film-data-contacts?count=true&today=true
+        GET /api/film-data-contacts?count=true&date=2025-11-18
     """
     try:
         # Get query parameters
         show_count = request.args.get('count', '').lower() == 'true'
+        filter_today = request.args.get('today', '').lower() == 'true'
+        filter_date = request.args.get('date', '').strip()
         
         # Get spreadsheet ID from environment
         spreadsheet_id = os.getenv('GOOGLE_SPREADSHEET_ID')
@@ -607,6 +613,23 @@ def get_film_data_contacts():
                 'timestamp': datetime.now().isoformat()
             }), 400
 
+        # กำหนดวันที่สำหรับกรอง
+        target_date = None
+        if filter_today:
+            target_date = datetime.now().strftime('%Y-%m-%d')
+        elif filter_date:
+            # Validate date format
+            try:
+                datetime.strptime(filter_date, '%Y-%m-%d')
+                target_date = filter_date
+            except ValueError:
+                return jsonify({
+                    'success': False,
+                    'error': 'Invalid date format. Use YYYY-MM-DD',
+                    'data': [],
+                    'timestamp': datetime.now().isoformat()
+                }), 400
+        
         # Extract data
         result = []
         consult_date_counts = {}  # นับจำนวน consult แต่ละวัน
@@ -623,6 +646,12 @@ def get_film_data_contacts():
             # Skip empty rows
             if not contact_person and not consult_date and not surgery_date:
                 continue
+            
+            # กรองตามวันที่ถ้ามีการระบุ
+            if target_date:
+                # ตรวจสอบว่ามีวันที่ตรงกับที่กรองหรือไม่
+                if consult_date != target_date and surgery_date != target_date:
+                    continue
 
             result.append({
                 'id': f'film-{idx}',
@@ -653,6 +682,13 @@ def get_film_data_contacts():
             'source': 'Google Sheets (Film data)',
             'columns': ['ผู้ติดต่อ', 'วันที่ได้นัด consult', 'วันที่ได้นัดผ่าตัด']
         }
+        
+        # เพิ่มข้อมูลการกรอง
+        if target_date:
+            response['filter'] = {
+                'date': target_date,
+                'type': 'today' if filter_today else 'custom'
+            }
         
         # Add count summary if requested
         if show_count:
