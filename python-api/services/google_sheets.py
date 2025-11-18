@@ -63,94 +63,172 @@ class GoogleSheetsService:
         available_sheets = [ws.title for ws in spreadsheet.worksheets()]
         raise ValueError(f"ไม่พบ sheet ที่ต้องการ. ลอง: {sheet_names}. Sheets ที่มี: {available_sheets}")
 
+    def _parse_google_sheets_datetime(self, datetime_str):
+        """Parse Google Sheets datetime format (DD/MM/YYYY, HH:MM:SS)"""
+        try:
+            if not datetime_str or datetime_str.strip() == '':
+                return None
+            
+            parts = datetime_str.strip().split(',')
+            if len(parts) != 2:
+                return None
+            
+            date_part = parts[0].strip()  # DD/MM/YYYY
+            time_part = parts[1].strip()  # HH:MM:SS
+            
+            # Parse date
+            date_components = date_part.split('/')
+            if len(date_components) != 3:
+                return None
+            
+            day = int(date_components[0])
+            month = int(date_components[1])
+            year = int(date_components[2])
+            
+            # Convert to YYYY-MM-DD
+            formatted_date = f"{year:04d}-{month:02d}-{day:02d}"
+            
+            # Parse hour
+            time_components = time_part.split(':')
+            hour = int(time_components[0]) if time_components else 0
+            
+            return {
+                'date': formatted_date,
+                'time': time_part,
+                'hour': hour,
+                'datetime': datetime_str
+            }
+        except:
+            return None
+
+    def _parse_duration_to_seconds(self, duration_str):
+        """Parse duration string (H:MM:SS or MM:SS) to seconds"""
+        try:
+            if not duration_str or duration_str.strip() == '':
+                return 0
+            
+            parts = duration_str.strip().split(':')
+            
+            if len(parts) == 3:  # H:MM:SS
+                hours, minutes, seconds = map(int, parts)
+                return hours * 3600 + minutes * 60 + seconds
+            elif len(parts) == 2:  # MM:SS
+                minutes, seconds = map(int, parts)
+                return minutes * 60 + seconds
+            else:
+                return 0
+        except:
+            return 0
+
     def read_call_matrix(self, date=None, use_latest=True):
-        """อ่านข้อมูล Call Matrix จาก Google Sheets
+        """อ่านข้อมูล Call Matrix จาก Google Sheets (สรุปจาก Call Log)
 
         Args:
-            date: วันที่ในรูปแบบ YYYY-MM-DD (ถ้าไม่ระบุและ use_latest=False จะใช้วันนี้)
+            date: วันที่ในรูปแบบ YYYY-MM-DD (ถ้าไม่ระบุจะใช้วันนี้)
             use_latest: ถ้าเป็น True จะใช้วันที่ล่าสุดที่มีข้อมูล (default: True)
 
         Returns:
-            dict: ข้อมูล call matrix
+            dict: ข้อมูล call matrix ในรูปแบบตาราง Agent x Time Slots
         """
         try:
-            # เปิด worksheet (ลองหลายชื่อที่เป็นไปได้)
+            # เปิด worksheet (Call Log)
             possible_names = [
                 'สรุป call_AI',
                 'สรุป call_AI_summary',
-                'call_AI_summary',
-                'Call Matrix'
+                'call_AI_summary'
             ]
             worksheet = self.get_worksheet_with_fallback(possible_names)
             
-            # ถ้าไม่ระบุวันที่ ให้ดึงวันที่ล่าสุดจาก sheet metadata หรือใช้วันนี้
+            # ตั้งค่าวันที่
+            bangkok_tz = pytz.timezone('Asia/Bangkok')
             if date is None:
-                bangkok_tz = pytz.timezone('Asia/Bangkok')
-                if use_latest:
-                    # ลองดึงวันที่จาก sheet metadata (last updated)
-                    try:
-                        # ดึงข้อมูล metadata
-                        sheet_metadata = worksheet.spreadsheet.fetch_sheet_metadata()
-                        last_update = None
-                        
-                        # หา sheet ที่ตรงกัน
-                        for sheet_info in sheet_metadata.get('sheets', []):
-                            properties = sheet_info.get('properties', {})
-                            if properties.get('title') == worksheet.title:
-                                # ใช้วันที่ปัจจุบันเนื่องจาก Google Sheets ไม่มี last modified per sheet
-                                last_update = datetime.now(bangkok_tz)
-                                break
-                        
-                        if last_update:
-                            date = last_update.strftime('%Y-%m-%d')
-                        else:
-                            date = datetime.now(bangkok_tz).strftime('%Y-%m-%d')
-                    except:
-                        date = datetime.now(bangkok_tz).strftime('%Y-%m-%d')
-                else:
-                    date = datetime.now(bangkok_tz).strftime('%Y-%m-%d')
+                date = datetime.now(bangkok_tz).strftime('%Y-%m-%d')
 
             # อ่านข้อมูลทั้งหมด
             all_values = worksheet.get_all_values()
 
             if len(all_values) < 2:
-                return {"error": "No data found"}
+                return {"success": False, "error": "No data found"}
 
-            # แปลงข้อมูลเป็น format ที่ใช้งานง่าย
-            headers = all_values[0]  # ['Agent', '9-10', '10-11', ...]
-            time_slots = headers[1:-1]  # เอาเฉพาะช่วงเวลา (ไม่เอา Agent และ รวม)
+            # หา headers
+            headers = all_values[0]
+            
+            # หาตำแหน่งคอลัมน์ที่ต้องการ
+            try:
+                start_col = headers.index('start')
+                caller_col = headers.index('ผู้โทร')
+                duration_col = headers.index('สรุปเวลา')
+            except ValueError as e:
+                return {
+                    "success": False,
+                    "error": f"Missing required columns: {str(e)}",
+                    "available_columns": headers
+                }
 
-            matrix_data = {}
-            totals_by_agent = {}
+            # กำหนดช่วงเวลา 9:00-20:00
+            time_slots = ['9-10', '10-11', '11-12', '12-13', '13-14', '14-15', 
+                         '15-16', '16-17', '17-18', '18-19', '19-20']
+            
+            # เป้าหมาย: Agent 101-108
+            target_agents = ['101', '102', '103', '104', '105', '106', '107', '108']
+            
+            # สร้างโครงสร้างข้อมูล
+            matrix_data = {agent: {slot: 0 for slot in time_slots} for agent in target_agents}
+            totals_by_agent = {agent: 0 for agent in target_agents}
             totals_by_slot = {slot: 0 for slot in time_slots}
-
-            for row in all_values[1:]:  # ข้ามแถวหัวตาราง
-                if not row or len(row) < 2:
+            
+            # ประมวลผลข้อมูล
+            MIN_DURATION_SECONDS = 30
+            processed_count = 0
+            
+            for row in all_values[1:]:  # ข้ามหัวตาราง
+                if len(row) <= max(start_col, caller_col, duration_col):
                     continue
-
-                agent_id = row[0]
-                if not agent_id or agent_id == 'รวม':
+                
+                # ดึงข้อมูล
+                start_datetime = row[start_col].strip()
+                caller = row[caller_col].strip()
+                duration_str = row[duration_col].strip()
+                
+                # กรอง Agent
+                if caller not in target_agents:
                     continue
-
-                matrix_data[agent_id] = {}
-                agent_total = 0
-
-                for i, slot in enumerate(time_slots, start=1):
-                    try:
-                        value = int(row[i]) if row[i] else 0
-                    except (ValueError, IndexError):
-                        value = 0
-
-                    matrix_data[agent_id][slot] = value
-                    agent_total += value
-                    totals_by_slot[slot] += value
-
-                totals_by_agent[agent_id] = agent_total
-
-            # ดึงวันที่อัปเดตล่าสุดของ sheet
-            bangkok_tz = pytz.timezone('Asia/Bangkok')
+                
+                # Parse datetime (format: DD/MM/YYYY, HH:MM:SS)
+                parsed_datetime = self._parse_google_sheets_datetime(start_datetime)
+                if not parsed_datetime:
+                    continue
+                
+                # กรองวันที่
+                if parsed_datetime['date'] != date:
+                    continue
+                
+                # กรอง duration
+                duration_seconds = self._parse_duration_to_seconds(duration_str)
+                if duration_seconds < MIN_DURATION_SECONDS:
+                    continue
+                
+                # หาช่วงเวลา
+                hour = parsed_datetime['hour']
+                time_slot = None
+                
+                for slot in time_slots:
+                    start_hour = int(slot.split('-')[0])
+                    end_hour = int(slot.split('-')[1])
+                    if start_hour <= hour < end_hour:
+                        time_slot = slot
+                        break
+                
+                if time_slot:
+                    matrix_data[caller][time_slot] += 1
+                    totals_by_agent[caller] += 1
+                    totals_by_slot[time_slot] += 1
+                    processed_count += 1
+            
+            # สร้าง response
             last_updated = datetime.now(bangkok_tz).strftime('%Y-%m-%d %H:%M:%S')
-
+            grand_total = sum(totals_by_agent.values())
+            
             return {
                 "success": True,
                 "date": date,
@@ -159,8 +237,11 @@ class GoogleSheetsService:
                 "matrix_data": matrix_data,
                 "totals_by_agent": totals_by_agent,
                 "totals_by_slot": totals_by_slot,
-                "grand_total": sum(totals_by_agent.values()),
-                "sheet_name": worksheet.title
+                "grand_total": grand_total,
+                "sheet_name": worksheet.title,
+                "processed_calls": processed_count,
+                "min_duration_seconds": MIN_DURATION_SECONDS,
+                "target_agents": target_agents
             }
 
         except ValueError as e:
