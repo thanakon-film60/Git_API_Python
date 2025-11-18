@@ -238,8 +238,6 @@ class GoogleSheetsService:
                 "last_updated": last_updated,
                 "time_slots": time_slots,
                 "matrix_data": matrix_data,
-                "totals_by_agent": totals_by_agent,
-                "totals_by_slot": totals_by_slot,
                 "grand_total": grand_total,
                 "sheet_name": worksheet.title,
                 "processed_calls": processed_count,
