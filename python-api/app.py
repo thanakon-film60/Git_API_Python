@@ -350,6 +350,7 @@ def index():
             '/health': 'Health check',
             '/film-data': 'Get all raw data from Film data sheet (all columns and rows)',
             '/api/film-data': 'Get surgery schedule data from Google Sheets',
+            '/api/film-data-contacts': 'Get contact data from Film data sheet (ผู้ติดต่อ, วันที่ได้นัด consult, วันที่ได้นัดผ่าตัด) (GET)',
             '/api/google-sheets/film-data': 'Get all raw data from Film data sheet (all columns and rows)',
             '/run-time': 'Get call statistics from สรุป call_AI sheet mapped by time slots (9:00-20:00) for callers 101-108',
             '/N_SaleIncentive_data': 'Get sale incentive data from N_SaleIncentive sheet (supports month/year filtering) (GET)',
@@ -539,6 +540,183 @@ def get_google_sheets_all_data():
             'success': False,
             'error': error_message,
             'data': None,
+            'timestamp': datetime.now().isoformat()
+        }), 500
+
+
+@app.route('/api/film-data-contacts', methods=['GET'])
+def get_film_data_contacts():
+    """
+    Get specific columns from Google Sheets 'Film data' sheet
+    Returns only: ผู้ติดต่อ, วันที่ได้นัด consult, วันที่ได้นัดผ่าตัด
+    
+    Query Parameters:
+    - count: "true" to get count summary by date (optional)
+    
+    Example:
+        GET /api/film-data-contacts
+        GET /api/film-data-contacts?count=true
+    """
+    try:
+        # Get query parameters
+        show_count = request.args.get('count', '').lower() == 'true'
+        
+        # Get spreadsheet ID from environment
+        spreadsheet_id = os.getenv('GOOGLE_SPREADSHEET_ID')
+        if not spreadsheet_id:
+            raise ValueError("GOOGLE_SPREADSHEET_ID not set in environment variables")
+
+        print(f"📊 Fetching contact data from Google Sheets 'Film data': {spreadsheet_id}")
+
+        # Get Google Sheets client
+        client = get_google_sheets_client()
+
+        # Open the spreadsheet
+        spreadsheet = client.open_by_key(spreadsheet_id)
+
+        # Get the 'Film data' sheet
+        sheet = spreadsheet.worksheet('Film data')
+
+        # Get all values from the sheet
+        all_values = sheet.get_all_values()
+
+        if not all_values or len(all_values) < 2:
+            return jsonify({
+                'success': True,
+                'data': [],
+                'total': 0,
+                'timestamp': datetime.now().isoformat(),
+                'source': 'Google Sheets (Film data)'
+            })
+
+        # Get headers
+        headers = all_values[0]
+        data_rows = all_values[1:]
+
+        # Find column indexes for required fields
+        try:
+            contact_col = headers.index('ผู้ติดต่อ')
+            consult_date_col = headers.index('วันที่ได้นัด consult')
+            surgery_date_col = headers.index('วันที่ได้นัดผ่าตัด')
+        except ValueError as e:
+            return jsonify({
+                'success': False,
+                'error': f'Required column not found: {str(e)}',
+                'available_columns': headers,
+                'data': [],
+                'timestamp': datetime.now().isoformat()
+            }), 400
+
+        # Extract data
+        result = []
+        consult_date_counts = {}  # นับจำนวน consult แต่ละวัน
+        surgery_date_counts = {}  # นับจำนวนผ่าตัดแต่ละวัน
+        
+        for idx, row in enumerate(data_rows, start=2):  # Start from row 2 (1-indexed)
+            if len(row) <= max(contact_col, consult_date_col, surgery_date_col):
+                continue
+
+            contact_person = row[contact_col].strip() if contact_col < len(row) else ''
+            consult_date = row[consult_date_col].strip() if consult_date_col < len(row) else ''
+            surgery_date = row[surgery_date_col].strip() if surgery_date_col < len(row) else ''
+
+            # Skip empty rows
+            if not contact_person and not consult_date and not surgery_date:
+                continue
+
+            result.append({
+                'id': f'film-{idx}',
+                'ผู้ติดต่อ': contact_person,
+                'วันที่ได้นัด consult': consult_date,
+                'วันที่ได้นัดผ่าตัด': surgery_date,
+                # English field names for easier access
+                'contact_person': contact_person,
+                'consult_date': consult_date,
+                'surgery_appointment_date': surgery_date
+            })
+            
+            # นับจำนวนตามวันที่
+            if consult_date:
+                consult_date_counts[consult_date] = consult_date_counts.get(consult_date, 0) + 1
+            
+            if surgery_date:
+                surgery_date_counts[surgery_date] = surgery_date_counts.get(surgery_date, 0) + 1
+
+        print(f"✅ Successfully fetched {len(result)} records from 'Film data'")
+
+        # Build response
+        response = {
+            'success': True,
+            'data': result,
+            'total': len(result),
+            'timestamp': datetime.now().isoformat(),
+            'source': 'Google Sheets (Film data)',
+            'columns': ['ผู้ติดต่อ', 'วันที่ได้นัด consult', 'วันที่ได้นัดผ่าตัด']
+        }
+        
+        # Add count summary if requested
+        if show_count:
+            # แปลงเป็น array และเรียงตามวันที่
+            consult_counts_array = [
+                {'date': date, 'count': count} 
+                for date, count in sorted(consult_date_counts.items())
+            ]
+            
+            surgery_counts_array = [
+                {'date': date, 'count': count} 
+                for date, count in sorted(surgery_date_counts.items())
+            ]
+            
+            response['count_summary'] = {
+                'consult_appointments': {
+                    'total_dates': len(consult_date_counts),
+                    'total_appointments': sum(consult_date_counts.values()),
+                    'by_date': consult_counts_array
+                },
+                'surgery_appointments': {
+                    'total_dates': len(surgery_date_counts),
+                    'total_appointments': sum(surgery_date_counts.values()),
+                    'by_date': surgery_counts_array
+                }
+            }
+
+        return jsonify(response)
+
+    except gspread.exceptions.WorksheetNotFound:
+        print("❌ Worksheet 'Film data' not found")
+        return jsonify({
+            'success': False,
+            'error': "Worksheet 'Film data' not found in spreadsheet",
+            'data': [],
+            'timestamp': datetime.now().isoformat()
+        }), 404
+
+    except gspread.exceptions.SpreadsheetNotFound:
+        print("❌ Spreadsheet not found")
+        return jsonify({
+            'success': False,
+            'error': "Spreadsheet not found. Check GOOGLE_SPREADSHEET_ID and service account permissions",
+            'data': [],
+            'timestamp': datetime.now().isoformat()
+        }), 404
+
+    except ValueError as e:
+        return jsonify({
+            'success': False,
+            'error': str(e),
+            'data': [],
+            'timestamp': datetime.now().isoformat()
+        }), 400
+
+    except Exception as e:
+        error_message = str(e)
+        print(f"❌ Error in /api/film-data-contacts: {error_message}")
+        traceback.print_exc()
+
+        return jsonify({
+            'success': False,
+            'error': error_message,
+            'data': [],
             'timestamp': datetime.now().isoformat()
         }), 500
 
@@ -1920,6 +2098,7 @@ def not_found(error):
             '/health',
             '/film-data',
             '/api/film-data',
+            '/api/film-data-contacts',
             '/api/google-sheets/film-data',
             '/run-time',
             '/N_SaleIncentive_data',
