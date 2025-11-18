@@ -613,6 +613,31 @@ def get_film_data_contacts():
                 'timestamp': datetime.now().isoformat()
             }), 400
 
+        # Helper function to parse and normalize date
+        def normalize_date(date_str):
+            """แปลงวันที่จาก DD/MM/YYYY หรือ YYYY-MM-DD เป็น YYYY-MM-DD"""
+            if not date_str or not date_str.strip():
+                return None
+            
+            date_str = date_str.strip()
+            
+            try:
+                # ลอง DD/MM/YYYY (รูปแบบจาก Google Sheets)
+                if '/' in date_str:
+                    parts = date_str.split('/')
+                    if len(parts) == 3:
+                        day, month, year = int(parts[0]), int(parts[1]), int(parts[2])
+                        return f"{year:04d}-{month:02d}-{day:02d}"
+                
+                # ลอง YYYY-MM-DD
+                elif '-' in date_str:
+                    datetime.strptime(date_str, '%Y-%m-%d')
+                    return date_str
+                
+                return None
+            except (ValueError, IndexError):
+                return None
+        
         # กำหนดวันที่สำหรับกรอง
         target_date = None
         if filter_today:
@@ -640,36 +665,42 @@ def get_film_data_contacts():
                 continue
 
             contact_person = row[contact_col].strip() if contact_col < len(row) else ''
-            consult_date = row[consult_date_col].strip() if consult_date_col < len(row) else ''
-            surgery_date = row[surgery_date_col].strip() if surgery_date_col < len(row) else ''
+            consult_date_raw = row[consult_date_col].strip() if consult_date_col < len(row) else ''
+            surgery_date_raw = row[surgery_date_col].strip() if surgery_date_col < len(row) else ''
+
+            # แปลงวันที่เป็นรูปแบบมาตรฐาน YYYY-MM-DD
+            consult_date_normalized = normalize_date(consult_date_raw)
+            surgery_date_normalized = normalize_date(surgery_date_raw)
 
             # Skip empty rows
-            if not contact_person and not consult_date and not surgery_date:
+            if not contact_person and not consult_date_raw and not surgery_date_raw:
                 continue
             
             # กรองตามวันที่ถ้ามีการระบุ
             if target_date:
-                # ตรวจสอบว่ามีวันที่ตรงกับที่กรองหรือไม่
-                if consult_date != target_date and surgery_date != target_date:
+                # ตรวจสอบว่ามีวันที่ตรงกับที่กรองหรือไม่ (เทียบรูปแบบ normalized)
+                if consult_date_normalized != target_date and surgery_date_normalized != target_date:
                     continue
 
             result.append({
                 'id': f'film-{idx}',
                 'ผู้ติดต่อ': contact_person,
-                'วันที่ได้นัด consult': consult_date,
-                'วันที่ได้นัดผ่าตัด': surgery_date,
+                'วันที่ได้นัด consult': consult_date_raw,
+                'วันที่ได้นัดผ่าตัด': surgery_date_raw,
                 # English field names for easier access
                 'contact_person': contact_person,
-                'consult_date': consult_date,
-                'surgery_appointment_date': surgery_date
+                'consult_date': consult_date_raw,
+                'consult_date_normalized': consult_date_normalized,
+                'surgery_appointment_date': surgery_date_raw,
+                'surgery_appointment_date_normalized': surgery_date_normalized
             })
             
-            # นับจำนวนตามวันที่
-            if consult_date:
-                consult_date_counts[consult_date] = consult_date_counts.get(consult_date, 0) + 1
+            # นับจำนวนตามวันที่ (ใช้รูปแบบ normalized)
+            if consult_date_normalized:
+                consult_date_counts[consult_date_normalized] = consult_date_counts.get(consult_date_normalized, 0) + 1
             
-            if surgery_date:
-                surgery_date_counts[surgery_date] = surgery_date_counts.get(surgery_date, 0) + 1
+            if surgery_date_normalized:
+                surgery_date_counts[surgery_date_normalized] = surgery_date_counts.get(surgery_date_normalized, 0) + 1
 
         print(f"✅ Successfully fetched {len(result)} records from 'Film data'")
 
