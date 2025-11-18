@@ -1914,7 +1914,7 @@ def get_call_matrix():
 
     Query Parameters:
         date (optional): วันที่ในรูปแบบ YYYY-MM-DD (ถ้าไม่ระบุจะใช้วันที่ล่าสุด)
-        use_latest (optional): "true" หรือ "false" - ใช้วันที่ล่าสุดหรือไม่ (default: true)
+        use_latest (optional): "true" หรือ "false" - ใช้วันที่ล่าสุดหรือไม่ (default: true เฉพาะตอนไม่ระบุ date)
 
     Example:
         GET /api/call-matrix
@@ -1923,7 +1923,13 @@ def get_call_matrix():
     """
     try:
         date = request.args.get('date')
-        use_latest = request.args.get('use_latest', 'true').lower() == 'true'
+        use_latest_param = request.args.get('use_latest')
+        
+        # ถ้าระบุ date แล้ว ให้ use_latest = false (ยกเว้นถ้ามีการระบุ use_latest ไว้)
+        if date and use_latest_param is None:
+            use_latest = False
+        else:
+            use_latest = use_latest_param is None or use_latest_param.lower() == 'true'
         
         result = call_matrix_service.get_call_matrix(date, use_latest)
 
