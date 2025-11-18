@@ -23,6 +23,10 @@ from google.ads.googleads.errors import GoogleAdsException
 from db_connection import get_db_connection
 from psycopg2 import Error
 
+# Import Call Matrix services
+from services.google_sheets import GoogleSheetsService
+from services.call_matrix import CallMatrixService
+
 # Load environment variables
 load_dotenv()
 
@@ -56,6 +60,10 @@ fb_ads_cache = {
     'expires_at': {}
 }
 FB_ADS_CACHE_DURATION = int(os.getenv('FB_ADS_CACHE_DURATION', 300))  # 5 นาที (300 วินาที)
+
+# Initialize Call Matrix services
+sheets_service = GoogleSheetsService()
+call_matrix_service = CallMatrixService(sheets_service)
 
 
 def get_google_sheets_client():
@@ -350,7 +358,13 @@ def index():
             '/api/facebook-ads-manager': 'Alias for /api/facebook-ads-campaigns (GET)',
             '/api/google-sheets-data': 'Get Google Sheets data from เคสได้ชื่อเบอร์ sheet (GET)',
             '/api/google-ads': 'Get Google Ads data (GET)',
-            '/data_bjh': 'Get all leads data from BJH PostgreSQL database (GET)'
+            '/data_bjh': 'Get all leads data from BJH PostgreSQL database (GET)',
+            '/api/call-matrix': 'Get call matrix data for all agents (GET)',
+            '/api/call-matrix/agent/<agent_id>': 'Get call summary for specific agent (GET)',
+            '/api/call-matrix/time-slot/<time_slot>': 'Get call summary for specific time slot (GET)',
+            '/api/call-matrix/log': 'Log a call for an agent (POST)',
+            '/api/call-matrix/update': 'Update call count manually (POST)',
+            '/api/call-matrix/batch-update': 'Batch update call counts (POST)'
         }
     })
 
@@ -1645,6 +1659,256 @@ def get_data_bjh():
         }), 500
 
 
+# ========================================
+# Call Matrix API Endpoints
+# ========================================
+
+@app.route('/api/call-matrix', methods=['GET'])
+def get_call_matrix():
+    """ดึงข้อมูล Call Matrix ทั้งหมด
+
+    Query Parameters:
+        date (optional): วันที่ในรูปแบบ YYYY-MM-DD (ถ้าไม่ระบุจะใช้วันที่ล่าสุด)
+        use_latest (optional): "true" หรือ "false" - ใช้วันที่ล่าสุดหรือไม่ (default: true)
+
+    Example:
+        GET /api/call-matrix
+        GET /api/call-matrix?date=2025-11-18
+        GET /api/call-matrix?use_latest=true
+    """
+    try:
+        date = request.args.get('date')
+        use_latest = request.args.get('use_latest', 'true').lower() == 'true'
+        
+        result = call_matrix_service.get_call_matrix(date, use_latest)
+
+        status_code = 200 if result.get('success') else 500
+        return jsonify(result), status_code
+
+    except Exception as e:
+        error_message = str(e)
+        print(f"❌ Error in /api/call-matrix: {error_message}")
+        traceback.print_exc()
+
+        return jsonify({
+            'success': False,
+            'error': error_message,
+            'timestamp': datetime.now().isoformat()
+        }), 500
+
+
+@app.route('/api/call-matrix/agent/<agent_id>', methods=['GET'])
+def get_agent_summary(agent_id):
+    """ดึงสรุปการโทรของ agent คนหนึ่ง
+
+    Path Parameters:
+        agent_id: รหัส agent (เช่น '101', '102')
+
+    Query Parameters:
+        date (optional): วันที่
+
+    Example:
+        GET /api/call-matrix/agent/101?date=2025-11-18
+    """
+    try:
+        date = request.args.get('date')
+        result = call_matrix_service.get_agent_summary(agent_id, date)
+
+        status_code = 200 if result.get('success') else 404
+        return jsonify(result), status_code
+
+    except Exception as e:
+        error_message = str(e)
+        print(f"❌ Error in /api/call-matrix/agent: {error_message}")
+        traceback.print_exc()
+
+        return jsonify({
+            'success': False,
+            'error': error_message,
+            'timestamp': datetime.now().isoformat()
+        }), 500
+
+
+@app.route('/api/call-matrix/time-slot/<time_slot>', methods=['GET'])
+def get_time_slot_summary(time_slot):
+    """ดึงสรุปการโทรในช่วงเวลาหนึ่ง
+
+    Path Parameters:
+        time_slot: ช่วงเวลา (เช่น '9-10', '10-11')
+
+    Query Parameters:
+        date (optional): วันที่
+
+    Example:
+        GET /api/call-matrix/time-slot/9-10?date=2025-11-18
+    """
+    try:
+        date = request.args.get('date')
+        result = call_matrix_service.get_time_slot_summary(time_slot, date)
+
+        status_code = 200 if result.get('success') else 404
+        return jsonify(result), status_code
+
+    except Exception as e:
+        error_message = str(e)
+        print(f"❌ Error in /api/call-matrix/time-slot: {error_message}")
+        traceback.print_exc()
+
+        return jsonify({
+            'success': False,
+            'error': error_message,
+            'timestamp': datetime.now().isoformat()
+        }), 500
+
+
+@app.route('/api/call-matrix/log', methods=['POST'])
+def log_call():
+    """บันทึกการโทร
+
+    Request Body:
+        {
+            "agent_id": "101",
+            "call_type": "outgoing",  # optional, default: "outgoing"
+            "time_slot": "9-10"       # optional, default: current time slot
+        }
+
+    Example:
+        POST /api/call-matrix/log
+        {
+            "agent_id": "101"
+        }
+    """
+    try:
+        data = request.get_json()
+
+        if not data or 'agent_id' not in data:
+            return jsonify({
+                "success": False,
+                "error": "agent_id is required"
+            }), 400
+
+        agent_id = data.get('agent_id')
+        call_type = data.get('call_type', 'outgoing')
+        time_slot = data.get('time_slot')
+
+        result = call_matrix_service.log_call(agent_id, call_type, time_slot)
+
+        status_code = 200 if result.get('success') else 400
+        return jsonify(result), status_code
+
+    except Exception as e:
+        error_message = str(e)
+        print(f"❌ Error in /api/call-matrix/log: {error_message}")
+        traceback.print_exc()
+
+        return jsonify({
+            'success': False,
+            'error': error_message,
+            'timestamp': datetime.now().isoformat()
+        }), 500
+
+
+@app.route('/api/call-matrix/update', methods=['POST'])
+def update_call_count():
+    """อัพเดทจำนวนการโทรด้วยตนเอง
+
+    Request Body:
+        {
+            "agent_id": "101",
+            "time_slot": "9-10",
+            "value": 5
+        }
+
+    Example:
+        POST /api/call-matrix/update
+        {
+            "agent_id": "101",
+            "time_slot": "9-10",
+            "value": 5
+        }
+    """
+    try:
+        data = request.get_json()
+
+        if not data:
+            return jsonify({
+                "success": False,
+                "error": "Request body is required"
+            }), 400
+
+        required_fields = ['agent_id', 'time_slot', 'value']
+        for field in required_fields:
+            if field not in data:
+                return jsonify({
+                    "success": False,
+                    "error": f"{field} is required"
+                }), 400
+
+        agent_id = data.get('agent_id')
+        time_slot = data.get('time_slot')
+        value = data.get('value')
+
+        # ใช้ set_call_count แทน update_call_count เพื่อตั้งค่าโดยตรง
+        result = sheets_service.set_call_count(agent_id, time_slot, value)
+
+        status_code = 200 if result.get('success') else 400
+        return jsonify(result), status_code
+
+    except Exception as e:
+        error_message = str(e)
+        print(f"❌ Error in /api/call-matrix/update: {error_message}")
+        traceback.print_exc()
+
+        return jsonify({
+            'success': False,
+            'error': error_message,
+            'timestamp': datetime.now().isoformat()
+        }), 500
+
+
+@app.route('/api/call-matrix/batch-update', methods=['POST'])
+def batch_update_call_counts():
+    """อัพเดทหลายช่องพร้อมกัน
+
+    Request Body:
+        {
+            "updates": [
+                {"agent_id": "101", "time_slot": "9-10", "value": 5},
+                {"agent_id": "102", "time_slot": "10-11", "value": 8}
+            ]
+        }
+    """
+    try:
+        data = request.get_json()
+
+        if not data or 'updates' not in data:
+            return jsonify({
+                "success": False,
+                "error": "updates array is required"
+            }), 400
+
+        updates = data.get('updates', [])
+        result = sheets_service.batch_update_call_counts(updates)
+
+        status_code = 200 if result.get('success') else 400
+        return jsonify(result), status_code
+
+    except Exception as e:
+        error_message = str(e)
+        print(f"❌ Error in /api/call-matrix/batch-update: {error_message}")
+        traceback.print_exc()
+
+        return jsonify({
+            'success': False,
+            'error': error_message,
+            'timestamp': datetime.now().isoformat()
+        }), 500
+
+
+# ========================================
+# Error Handlers
+# ========================================
+
 @app.errorhandler(404)
 def not_found(error):
     """Handle 404 errors"""
@@ -1663,7 +1927,13 @@ def not_found(error):
             '/api/facebook-ads-campaigns',
             '/api/google-sheets-data',
             '/api/google-ads',
-            '/data_bjh'
+            '/data_bjh',
+            '/api/call-matrix',
+            '/api/call-matrix/agent/<agent_id>',
+            '/api/call-matrix/time-slot/<time_slot>',
+            '/api/call-matrix/log',
+            '/api/call-matrix/update',
+            '/api/call-matrix/batch-update'
         ]
     }), 404
 
