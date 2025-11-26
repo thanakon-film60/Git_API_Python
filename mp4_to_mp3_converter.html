@@ -1,0 +1,637 @@
+<!DOCTYPE html>
+<html lang="th">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>🎬 MP4 to MP3 Converter</title>
+    <style>
+      * {
+        margin: 0;
+        padding: 0;
+        box-sizing: border-box;
+      }
+
+      body {
+        font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        min-height: 100vh;
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        padding: 20px;
+      }
+
+      .container {
+        background: white;
+        border-radius: 20px;
+        box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+        padding: 40px;
+        max-width: 600px;
+        width: 100%;
+      }
+
+      .header {
+        text-align: center;
+        margin-bottom: 30px;
+      }
+
+      .header h1 {
+        font-size: 2.5em;
+        color: #333;
+        margin-bottom: 10px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 10px;
+      }
+
+      .header p {
+        color: #666;
+        font-size: 1.1em;
+      }
+
+      .upload-area {
+        border: 3px dashed #667eea;
+        border-radius: 15px;
+        padding: 40px;
+        text-align: center;
+        cursor: pointer;
+        transition: all 0.3s ease;
+        background: #f8f9ff;
+        margin-bottom: 30px;
+      }
+
+      .upload-area:hover {
+        border-color: #764ba2;
+        background: #f0f0ff;
+      }
+
+      .upload-area.dragover {
+        border-color: #764ba2;
+        background: #e8e8ff;
+        transform: scale(1.02);
+      }
+
+      .upload-icon {
+        font-size: 3em;
+        margin-bottom: 15px;
+      }
+
+      .upload-area h2 {
+        color: #333;
+        margin-bottom: 10px;
+        font-size: 1.3em;
+      }
+
+      .upload-area p {
+        color: #666;
+        font-size: 0.95em;
+        margin-bottom: 5px;
+      }
+
+      .upload-area .size-info {
+        color: #999;
+        font-size: 0.85em;
+        margin-top: 10px;
+      }
+
+      input[type="file"] {
+        display: none;
+      }
+
+      .settings {
+        background: #f8f9ff;
+        border-radius: 15px;
+        padding: 25px;
+        margin-bottom: 25px;
+      }
+
+      .setting-group {
+        margin-bottom: 20px;
+      }
+
+      .setting-group:last-child {
+        margin-bottom: 0;
+      }
+
+      .setting-group label {
+        display: block;
+        margin-bottom: 8px;
+        color: #333;
+        font-weight: 600;
+        font-size: 0.95em;
+      }
+
+      .setting-group select {
+        width: 100%;
+        padding: 12px;
+        border: 2px solid #ddd;
+        border-radius: 8px;
+        font-size: 0.95em;
+        color: #333;
+        background-color: white;
+        cursor: pointer;
+        transition: border-color 0.3s ease;
+      }
+
+      .setting-group select:hover {
+        border-color: #667eea;
+      }
+
+      .setting-group select:focus {
+        outline: none;
+        border-color: #667eea;
+        box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
+      }
+
+      .file-info {
+        background: #f0f9ff;
+        border-left: 4px solid #667eea;
+        padding: 15px;
+        border-radius: 8px;
+        margin-bottom: 20px;
+        display: none;
+      }
+
+      .file-info.show {
+        display: block;
+      }
+
+      .file-info-item {
+        display: flex;
+        justify-content: space-between;
+        margin-bottom: 8px;
+        font-size: 0.95em;
+      }
+
+      .file-info-item:last-child {
+        margin-bottom: 0;
+      }
+
+      .file-info-item strong {
+        color: #333;
+      }
+
+      .file-info-item span {
+        color: #666;
+      }
+
+      .buttons {
+        display: flex;
+        gap: 12px;
+        margin-bottom: 20px;
+      }
+
+      button {
+        flex: 1;
+        padding: 15px;
+        border: none;
+        border-radius: 10px;
+        font-size: 1em;
+        font-weight: 600;
+        cursor: pointer;
+        transition: all 0.3s ease;
+      }
+
+      .btn-convert {
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        color: white;
+      }
+
+      .btn-convert:hover:not(:disabled) {
+        transform: translateY(-2px);
+        box-shadow: 0 10px 25px rgba(102, 126, 234, 0.4);
+      }
+
+      .btn-convert:active:not(:disabled) {
+        transform: translateY(0);
+      }
+
+      .btn-convert:disabled {
+        opacity: 0.5;
+        cursor: not-allowed;
+      }
+
+      .btn-clear {
+        background: #f0f0f0;
+        color: #333;
+      }
+
+      .btn-clear:hover:not(:disabled) {
+        background: #e0e0e0;
+      }
+
+      .btn-clear:disabled {
+        opacity: 0.5;
+        cursor: not-allowed;
+      }
+
+      .progress-container {
+        display: none;
+        margin-bottom: 20px;
+      }
+
+      .progress-container.show {
+        display: block;
+      }
+
+      .progress-label {
+        display: flex;
+        justify-content: space-between;
+        margin-bottom: 8px;
+        font-size: 0.9em;
+        color: #666;
+      }
+
+      .progress-bar {
+        width: 100%;
+        height: 8px;
+        background: #e0e0e0;
+        border-radius: 10px;
+        overflow: hidden;
+      }
+
+      .progress-fill {
+        height: 100%;
+        background: linear-gradient(90deg, #667eea 0%, #764ba2 100%);
+        width: 0%;
+        transition: width 0.3s ease;
+      }
+
+      .status-message {
+        padding: 15px;
+        border-radius: 10px;
+        margin-bottom: 20px;
+        display: none;
+        font-size: 0.95em;
+        animation: slideIn 0.3s ease;
+      }
+
+      .status-message.show {
+        display: block;
+      }
+
+      .status-message.success {
+        background: #d4edda;
+        color: #155724;
+        border-left: 4px solid #28a745;
+      }
+
+      .status-message.error {
+        background: #f8d7da;
+        color: #721c24;
+        border-left: 4px solid #dc3545;
+      }
+
+      .status-message.info {
+        background: #d1ecf1;
+        color: #0c5460;
+        border-left: 4px solid #17a2b8;
+      }
+
+      @keyframes slideIn {
+        from {
+          opacity: 0;
+          transform: translateY(-10px);
+        }
+        to {
+          opacity: 1;
+          transform: translateY(0);
+        }
+      }
+
+      .info-box {
+        background: #fff9e6;
+        border-left: 4px solid #ffc107;
+        padding: 15px;
+        border-radius: 8px;
+        font-size: 0.9em;
+        color: #856404;
+        margin-top: 20px;
+      }
+
+      .info-box strong {
+        display: block;
+        margin-bottom: 8px;
+      }
+
+      .info-box ul {
+        margin-left: 20px;
+      }
+
+      .info-box li {
+        margin-bottom: 5px;
+      }
+
+      @media (max-width: 600px) {
+        .container {
+          padding: 25px;
+        }
+
+        .header h1 {
+          font-size: 1.8em;
+        }
+
+        .upload-area {
+          padding: 30px 20px;
+        }
+
+        .buttons {
+          flex-direction: column;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="container">
+      <!-- Header -->
+      <div class="header">
+        <h1>🎬 MP4 to MP3</h1>
+        <p>แปลงวิดีโอเป็นเสียงได้ง่าย ๆ</p>
+      </div>
+
+      <!-- Status Messages -->
+      <div id="statusMessage" class="status-message"></div>
+
+      <!-- Upload Area -->
+      <div class="upload-area" id="uploadArea">
+        <div class="upload-icon">📁</div>
+        <h2>คลิกหรือลากไฟล์มาที่นี่</h2>
+        <p>เลือก MP4 ที่ต้องการแปลง</p>
+        <p class="size-info">ขนาดสูงสุด: 500MB</p>
+      </div>
+      <input type="file" id="fileInput" accept=".mp4" />
+
+      <!-- File Info -->
+      <div id="fileInfo" class="file-info">
+        <div class="file-info-item">
+          <strong>ไฟล์:</strong>
+          <span id="fileName">-</span>
+        </div>
+        <div class="file-info-item">
+          <strong>ขนาด:</strong>
+          <span id="fileSize">-</span>
+        </div>
+      </div>
+
+      <!-- Settings -->
+      <div class="settings">
+        <div class="setting-group">
+          <label for="bitrate">📊 Bitrate (คุณภาพเสียง)</label>
+          <select id="bitrate">
+            <option value="128k">128k - บีบอัด (เล็กที่สุด)</option>
+            <option value="192k" selected>192k - ปกติ (แนะนำ)</option>
+            <option value="256k">256k - สูง</option>
+            <option value="320k">320k - สูงสุด (ไฟล์ใหญ่)</option>
+          </select>
+        </div>
+
+        <div class="setting-group">
+          <label for="sampleRate">🎵 Sample Rate (ความถี่ เฮิรตซ์)</label>
+          <select id="sampleRate">
+            <option value="22050">22050 Hz - บีบอัด</option>
+            <option value="44100" selected>44100 Hz - ปกติ (แนะนำ)</option>
+            <option value="48000">48000 Hz - สูงสุด</option>
+          </select>
+        </div>
+      </div>
+
+      <!-- Progress -->
+      <div id="progressContainer" class="progress-container">
+        <div class="progress-label">
+          <span id="progressText">กำลังแปลง...</span>
+          <span id="progressPercent">0%</span>
+        </div>
+        <div class="progress-bar">
+          <div id="progressFill" class="progress-fill"></div>
+        </div>
+      </div>
+
+      <!-- Buttons -->
+      <div class="buttons">
+        <button class="btn-convert" id="convertBtn" disabled>🚀 แปลง</button>
+        <button class="btn-clear" id="clearBtn">🔄 ล้าง</button>
+      </div>
+
+      <!-- Info Box -->
+      <div class="info-box">
+        <strong>💡 เคล็ดลับ:</strong>
+        <ul>
+          <li>
+            <strong>Bitrate:</strong> คุณภาพเสียง (ยิ่งสูงยิ่งดีแต่ไฟล์ใหญ่)
+          </li>
+          <li>
+            <strong>Sample Rate:</strong> ความถี่เสียง (44100Hz
+            เพียงพอสำหรับเพลง)
+          </li>
+          <li>การแปลงขึ้นอยู่กับขนาดไฟล์ (อาจใช้เวลาสักครู่)</li>
+        </ul>
+      </div>
+    </div>
+
+    <script>
+      const API_URL = "http://localhost:5001/api/convert/mp4-to-mp3";
+
+      const elements = {
+        uploadArea: document.getElementById("uploadArea"),
+        fileInput: document.getElementById("fileInput"),
+        fileInfo: document.getElementById("fileInfo"),
+        fileName: document.getElementById("fileName"),
+        fileSize: document.getElementById("fileSize"),
+        bitrate: document.getElementById("bitrate"),
+        sampleRate: document.getElementById("sampleRate"),
+        convertBtn: document.getElementById("convertBtn"),
+        clearBtn: document.getElementById("clearBtn"),
+        progressContainer: document.getElementById("progressContainer"),
+        progressText: document.getElementById("progressText"),
+        progressPercent: document.getElementById("progressPercent"),
+        progressFill: document.getElementById("progressFill"),
+        statusMessage: document.getElementById("statusMessage"),
+      };
+
+      let selectedFile = null;
+
+      // Format file size
+      function formatFileSize(bytes) {
+        if (bytes === 0) return "0 Bytes";
+        const k = 1024;
+        const sizes = ["Bytes", "KB", "MB", "GB"];
+        const i = Math.floor(Math.log(bytes) / Math.log(k));
+        return (
+          Math.round((bytes / Math.pow(k, i)) * 100) / 100 + " " + sizes[i]
+        );
+      }
+
+      // Show status message
+      function showStatus(message, type = "info") {
+        elements.statusMessage.textContent = message;
+        elements.statusMessage.className = `status-message show ${type}`;
+
+        if (type === "success") {
+          setTimeout(() => {
+            elements.statusMessage.classList.remove("show");
+          }, 5000);
+        }
+      }
+
+      // Update file display
+      function updateFileDisplay() {
+        if (selectedFile) {
+          elements.fileName.textContent = selectedFile.name;
+          elements.fileSize.textContent = formatFileSize(selectedFile.size);
+          elements.fileInfo.classList.add("show");
+          elements.convertBtn.disabled = false;
+        }
+      }
+
+      // File selection
+      elements.fileInput.addEventListener("change", (e) => {
+        const file = e.target.files[0];
+        if (file) {
+          if (file.size > 500 * 1024 * 1024) {
+            showStatus("❌ ไฟล์ใหญ่เกินไป (สูงสุด 500MB)", "error");
+            selectedFile = null;
+            elements.fileInput.value = "";
+          } else {
+            selectedFile = file;
+            updateFileDisplay();
+            showStatus(`✅ เลือกไฟล์: ${file.name}`, "success");
+          }
+        }
+      });
+
+      // Drag and drop
+      elements.uploadArea.addEventListener("dragover", (e) => {
+        e.preventDefault();
+        elements.uploadArea.classList.add("dragover");
+      });
+
+      elements.uploadArea.addEventListener("dragleave", () => {
+        elements.uploadArea.classList.remove("dragover");
+      });
+
+      elements.uploadArea.addEventListener("drop", (e) => {
+        e.preventDefault();
+        elements.uploadArea.classList.remove("dragover");
+
+        const file = e.dataTransfer.files[0];
+        if (file && file.type === "video/mp4") {
+          selectedFile = file;
+          elements.fileInput.files = e.dataTransfer.files;
+          updateFileDisplay();
+          showStatus(`✅ ไฟล์ถูกเลือก: ${file.name}`, "success");
+        } else {
+          showStatus("❌ กรุณาเลือกไฟล์ MP4", "error");
+        }
+      });
+
+      elements.uploadArea.addEventListener("click", () => {
+        elements.fileInput.click();
+      });
+
+      // Convert
+      elements.convertBtn.addEventListener("click", async () => {
+        if (!selectedFile) {
+          showStatus("❌ กรุณาเลือกไฟล์", "error");
+          return;
+        }
+
+        const formData = new FormData();
+        formData.append("file", selectedFile);
+
+        const bitrate = elements.bitrate.value;
+        const sampleRate = elements.sampleRate.value;
+
+        try {
+          elements.convertBtn.disabled = true;
+          elements.progressContainer.classList.add("show");
+          elements.progressFill.style.width = "30%";
+          elements.progressText.textContent = "กำลังอัปโหลด...";
+
+          const response = await fetch(
+            `${API_URL}?bitrate=${bitrate}&sample_rate=${sampleRate}`,
+            {
+              method: "POST",
+              body: formData,
+            }
+          );
+
+          if (!response.ok) {
+            const error = await response.json();
+            throw new Error(error.error || "เกิดข้อผิดพลาดในการแปลง");
+          }
+
+          elements.progressFill.style.width = "90%";
+          elements.progressText.textContent = "กำลังแปลง...";
+
+          const conversionTime = response.headers.get("X-Conversion-Time");
+          const outputSize = response.headers.get("X-Output-Size");
+
+          // Download file
+          const blob = await response.blob();
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement("a");
+          a.href = url;
+          a.download = selectedFile.name.replace(".mp4", ".mp3");
+          document.body.appendChild(a);
+          a.click();
+          document.body.removeChild(a);
+          URL.revokeObjectURL(url);
+
+          elements.progressFill.style.width = "100%";
+
+          const sizeText = outputSize
+            ? ` (${formatFileSize(parseInt(outputSize))})`
+            : "";
+          const timeText = conversionTime
+            ? ` ⏱️ ${parseFloat(conversionTime).toFixed(2)}s`
+            : "";
+
+          showStatus(`✅ แปลงสำเร็จ!${sizeText}${timeText}`, "success");
+
+          setTimeout(() => {
+            elements.progressContainer.classList.remove("show");
+            elements.progressFill.style.width = "0%";
+          }, 2000);
+        } catch (error) {
+          console.error("Error:", error);
+          showStatus(`❌ เกิดข้อผิดพลาด: ${error.message}`, "error");
+          elements.progressContainer.classList.remove("show");
+        } finally {
+          elements.convertBtn.disabled = !selectedFile;
+        }
+      });
+
+      // Clear
+      elements.clearBtn.addEventListener("click", () => {
+        selectedFile = null;
+        elements.fileInput.value = "";
+        elements.fileInfo.classList.remove("show");
+        elements.progressContainer.classList.remove("show");
+        elements.progressFill.style.width = "0%";
+        elements.statusMessage.classList.remove("show");
+        elements.convertBtn.disabled = true;
+      });
+
+      // API availability check
+      async function checkAPI() {
+        try {
+          const response = await fetch(
+            "http://localhost:5001/api/convert/info"
+          );
+          if (response.ok) {
+            showStatus("✅ API พร้อมใช้งาน", "info");
+          }
+        } catch (error) {
+          showStatus(
+            "⚠️ ไม่สามารถเชื่อมต่อ API ได้ (ต้องรัน converter_server.py)",
+            "error"
+          );
+        }
+      }
+
+      // Check API on load
+      window.addEventListener("load", checkAPI);
+    </script>
+  </body>
+</html>

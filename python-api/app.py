@@ -3,7 +3,7 @@ Flask API for accessing Google Sheets data (Film data)
 This API serves as a backend for the Performance Surgery Schedule system.
 """
 
-from flask import Flask, jsonify, request
+from flask import Flask, jsonify, request, send_file
 from flask_cors import CORS
 from flask_compress import Compress
 import os
@@ -22,6 +22,14 @@ from google.ads.googleads.client import GoogleAdsClient
 from google.ads.googleads.errors import GoogleAdsException
 from db_connection import get_db_connection
 from psycopg2 import Error
+import shutil
+import tempfile
+from pathlib import Path
+try:
+    from moviepy.editor import VideoFileClip
+except ImportError:
+    VideoFileClip = None
+import mimetypes
 
 # Import Call Matrix services
 from services.google_sheets import GoogleSheetsService
@@ -357,6 +365,9 @@ def index():
             '/api/clear-cache': 'Clear data cache (POST)',
             '/api/facebook-ads-campaigns': 'Get Facebook Ads campaigns data (supports level, date filtering, daily breakdown) (GET)',
             '/api/facebook-ads-manager': 'Alias for /api/facebook-ads-campaigns (GET)',
+            '/api/facebook-graph-insights': 'Get Facebook Ad insights via Graph API with video thumbnails (GET)',
+            '/api/facebook-videos-direct': 'Get Facebook videos with direct downloadable URLs (แนะนำ) (GET)',
+            '/api/facebook-videos': 'Get Facebook videos from ads (supports ad_id, date filtering) (GET)',
             '/api/google-sheets-data': 'Get Google Sheets data from เคสได้ชื่อเบอร์ sheet (GET)',
             '/api/google-ads': 'Get Google Ads data (GET)',
             '/data_bjh': 'Get all leads data from BJH PostgreSQL database (GET)',
@@ -1262,6 +1273,892 @@ def get_facebook_ads_manager():
 
 
 # ========================================
+# Facebook Graph API - Direct Insights
+# ========================================
+
+@app.route('/api/facebook-graph-insights', methods=['GET'])
+def get_facebook_graph_insights():
+    """
+    Get Facebook Ad insights directly via Graph API v24.0
+    
+    Query Parameters:
+    - level: "ad" | "adset" | "campaign" (default: "ad")
+    - date_preset: "today" | "yesterday" | "last_7d" | "last_30d" (default: "today")
+    - action_breakdowns: comma-separated (e.g., "action_type")
+    - include_videos: "true" to include video thumbnails and URLs
+    - limit: Maximum number of results (default: 100)
+    
+    Example:
+        GET /api/facebook-graph-insights?level=ad&date_preset=today&include_videos=true
+    """
+    try:
+        # Get environment variables
+        access_token = os.getenv('FACEBOOK_ACCESS_TOKEN')
+        ad_account_id = os.getenv('FACEBOOK_AD_ACCOUNT_ID')
+        
+        if not access_token or not ad_account_id:
+            return jsonify({
+                'success': False,
+                'error': 'Missing Facebook credentials',
+                'data': []
+            }), 400
+        
+        # Get query parameters
+        level = request.args.get('level', 'ad')
+        date_preset = request.args.get('date_preset', 'today')
+        action_breakdowns = request.args.get('action_breakdowns', '')
+        include_videos = request.args.get('include_videos', '').lower() == 'true'
+        limit = request.args.get('limit', type=int, default=100)
+        
+        # Build Graph API URL
+        base_url = f'https://graph.facebook.com/v24.0/{ad_account_id}/insights'
+        
+        # Build fields
+        fields = [
+            'ad_id',
+            'ad_name',
+            'adset_id',
+            'adset_name',
+            'campaign_id',
+            'campaign_name',
+            'spend',
+            'impressions',
+            'clicks',
+            'ctr',
+            'cpc',
+            'cpm',
+            'reach',
+            'actions',
+            'cost_per_action_type'
+        ]
+        
+        # Build params
+        params = {
+            'level': level,
+            'fields': ','.join(fields),
+            'date_preset': date_preset,
+            'access_token': access_token,
+            'limit': limit
+        }
+        
+        if action_breakdowns:
+            params['action_breakdowns'] = action_breakdowns
+        
+        print(f"📊 Fetching Graph API insights: {base_url}")
+        
+        # Make request to Graph API
+        response = requests.get(base_url, params=params)
+        response.raise_for_status()
+        
+        result = response.json()
+        ads_data = result.get('data', [])
+        
+        # Process ads and optionally fetch videos
+        processed_data = []
+        
+        for ad in ads_data:
+            ad_id = ad.get('ad_id')
+            
+            ad_info = {
+                **ad,
+                'video_thumbnail': None,
+                'video_url': None,
+                'has_video': False
+            }
+            
+            # Fetch video info if requested
+            if include_videos and ad_id:
+                try:
+                    # Get ad creative
+                    creative_url = f'https://graph.facebook.com/v24.0/{ad_id}'
+                    creative_params = {
+                        'fields': 'creative{thumbnail_url,video_id,object_story_spec}',
+                        'access_token': access_token
+                    }
+                    
+                    creative_response = requests.get(creative_url, params=creative_params)
+                    if creative_response.ok:
+                        creative_data = creative_response.json()
+                        
+                        if 'creative' in creative_data:
+                            creative = creative_data['creative']
+                            
+                            # Get thumbnail
+                            thumbnail = creative.get('thumbnail_url')
+                            video_id = creative.get('video_id')
+                            
+                            if thumbnail:
+                                ad_info['video_thumbnail'] = thumbnail
+                                ad_info['has_video'] = True
+                            
+                            # Get video URL if available
+                            if video_id:
+                                video_url = f'https://graph.facebook.com/v24.0/{video_id}'
+                                video_params = {
+                                    'fields': 'source,permalink_url,picture',
+                                    'access_token': access_token
+                                }
+                                
+                                video_response = requests.get(video_url, params=video_params)
+                                if video_response.ok:
+                                    video_data = video_response.json()
+                                    ad_info['video_url'] = video_data.get('source')
+                                    ad_info['video_permalink'] = video_data.get('permalink_url')
+                                    ad_info['video_thumbnail'] = video_data.get('picture', ad_info['video_thumbnail'])
+                
+                except Exception as e:
+                    print(f"⚠️ Error fetching video for ad {ad_id}: {str(e)}")
+            
+            processed_data.append(ad_info)
+        
+        print(f"✅ Successfully fetched {len(processed_data)} ads from Graph API")
+        
+        # Build response
+        response_data = {
+            'success': True,
+            'api_version': 'v24.0',
+            'level': level,
+            'date_preset': date_preset,
+            'data': processed_data,
+            'total_records': len(processed_data),
+            'paging': result.get('paging', {}),
+            'timestamp': datetime.now().isoformat(),
+            'graph_api_url': base_url
+        }
+        
+        return jsonify(response_data)
+        
+    except requests.exceptions.RequestException as e:
+        error_message = f"Graph API request failed: {str(e)}"
+        print(f"❌ {error_message}")
+        
+        return jsonify({
+            'success': False,
+            'error': error_message,
+            'data': [],
+            'timestamp': datetime.now().isoformat()
+        }), 500
+        
+    except Exception as e:
+        error_message = str(e)
+        print(f"❌ Error in /api/facebook-graph-insights: {error_message}")
+        traceback.print_exc()
+        
+        return jsonify({
+            'success': False,
+            'error': error_message,
+            'data': [],
+            'timestamp': datetime.now().isoformat()
+        }), 500
+
+
+# ========================================
+# Facebook Video API - Test Endpoint
+# ========================================
+
+@app.route('/api/test-facebook-videos', methods=['GET'])
+def test_facebook_videos():
+    """
+    Test endpoint for Facebook video API
+    ทดสอบการดึงวิดีโอจาก Facebook Ads
+    
+    Query Parameters:
+    - limit: จำนวนวิดีโอที่ต้องการทดสอบ (default: 3)
+    
+    Example:
+        GET /api/test-facebook-videos
+        GET /api/test-facebook-videos?limit=5
+    """
+    try:
+        # Get parameters
+        limit = request.args.get('limit', type=int, default=3)
+        
+        # Get credentials
+        access_token = os.getenv('FACEBOOK_ACCESS_TOKEN')
+        page_access_token = os.getenv('FACEBOOK_PAGE_ACCESS_TOKEN')
+        ad_account_id = os.getenv('FACEBOOK_AD_ACCOUNT_ID')
+        
+        if not access_token or not ad_account_id:
+            return jsonify({
+                'success': False,
+                'error': 'Missing credentials. Please check FACEBOOK_ACCESS_TOKEN and FACEBOOK_AD_ACCOUNT_ID',
+                'test_status': 'failed',
+                'videos': []
+            }), 400
+        
+        # Use Page Access Token for video fetching if available
+        video_token = page_access_token if page_access_token else access_token
+        
+        print(f"🧪 Testing Facebook Video API (limit: {limit})")
+        
+        # Build test request
+        insights_url = f'https://graph.facebook.com/v24.0/{ad_account_id}/insights'
+        params = {
+            'level': 'ad',
+            'fields': 'ad_id,ad_name,campaign_name,spend,impressions',
+            'date_preset': 'today',
+            'access_token': access_token,
+            'limit': limit
+        }
+        
+        # Fetch insights
+        print("📡 Step 1: Fetching ad insights...")
+        response = requests.get(insights_url, params=params, timeout=30)
+        response.raise_for_status()
+        
+        insights_data = response.json().get('data', [])
+        print(f"✅ Found {len(insights_data)} ads")
+        
+        if not insights_data:
+            return jsonify({
+                'success': True,
+                'test_status': 'no_ads_found',
+                'message': 'No ads found for today. Try changing date_preset.',
+                'videos': [],
+                'debug_info': {
+                    'api_url': insights_url,
+                    'date_preset': 'today'
+                }
+            })
+        
+        # Process videos
+        test_results = []
+        videos_found = 0
+        
+        for i, insight in enumerate(insights_data, 1):
+            ad_id = insight.get('ad_id')
+            print(f"\n📹 Step 2.{i}: Checking ad {ad_id}")
+            
+            result = {
+                'step': i,
+                'ad_id': ad_id,
+                'ad_name': insight.get('ad_name'),
+                'has_creative': False,
+                'has_video': False,
+                'video_data': None,
+                'errors': []
+            }
+            
+            try:
+                # Get creative
+                creative_url = f'https://graph.facebook.com/v24.0/{ad_id}'
+                creative_params = {
+                    'fields': 'creative{video_id,thumbnail_url}',
+                    'access_token': access_token
+                }
+                
+                creative_response = requests.get(creative_url, params=creative_params, timeout=10)
+                if creative_response.ok:
+                    creative_data = creative_response.json()
+                    creative = creative_data.get('creative', {})
+                    result['has_creative'] = True
+                    
+                    video_id = creative.get('video_id')
+                    if video_id:
+                        result['has_video'] = True
+                        print(f"   ✅ Found video ID: {video_id}")
+                        
+                        # Get video details (use Page Access Token for video file access)
+                        video_url = f'https://graph.facebook.com/v24.0/{video_id}'
+                        video_params = {
+                            'fields': 'source,title,length,picture,permalink_url',
+                            'access_token': video_token  # Use Page Access Token instead of Ads Token
+                        }
+                        
+                        video_response = requests.get(video_url, params=video_params, timeout=10)
+                        if video_response.ok:
+                            video_data = video_response.json()
+                            result['video_data'] = {
+                                'video_id': video_id,
+                                'title': video_data.get('title', insight.get('ad_name')),
+                                'length': video_data.get('length', 0),
+                                'source_url': video_data.get('source', '')[:100] + '...' if video_data.get('source') else None,
+                                'permalink': video_data.get('permalink_url'),
+                                'thumbnail': video_data.get('picture', '')[:100] + '...' if video_data.get('picture') else None,
+                                'has_download_url': bool(video_data.get('source'))
+                            }
+                            videos_found += 1
+                            print(f"   ✅ Video details retrieved successfully")
+                        else:
+                            result['errors'].append(f"Failed to fetch video details: {video_response.status_code}")
+                    else:
+                        print(f"   ⚠️ No video in this ad")
+                else:
+                    result['errors'].append(f"Failed to fetch creative: {creative_response.status_code}")
+                    
+            except Exception as e:
+                result['errors'].append(str(e))
+                print(f"   ❌ Error: {str(e)}")
+            
+            test_results.append(result)
+        
+        # Summary
+        summary = {
+            'total_ads_checked': len(insights_data),
+            'ads_with_creative': sum(1 for r in test_results if r.get('has_creative', False)),
+            'ads_with_video': sum(1 for r in test_results if r.get('has_video', False)),
+            'videos_with_download_url': sum(1 for r in test_results if r.get('video_data') and r['video_data'].get('has_download_url', False))
+        }
+        
+        print(f"\n📊 Test Summary:")
+        print(f"   - Total ads checked: {summary['total_ads_checked']}")
+        print(f"   - Ads with video: {summary['ads_with_video']}")
+        print(f"   - Videos with download URL: {summary['videos_with_download_url']}")
+        
+        # Response
+        return jsonify({
+            'success': True,
+            'test_status': 'completed',
+            'message': f'Test completed. Found {videos_found} videos with download URLs.',
+            'summary': summary,
+            'test_results': test_results,
+            'timestamp': datetime.now().isoformat(),
+            'api_info': {
+                'endpoint': '/api/facebook-videos-direct',
+                'description': 'Use this endpoint to get all videos with download URLs',
+                'example': '/api/facebook-videos-direct?date_preset=today'
+            }
+        })
+        
+    except requests.exceptions.Timeout:
+        return jsonify({
+            'success': False,
+            'test_status': 'timeout',
+            'error': 'Request timeout. Facebook API may be slow.',
+            'videos': []
+        }), 500
+        
+    except requests.exceptions.RequestException as e:
+        return jsonify({
+            'success': False,
+            'test_status': 'api_error',
+            'error': f'Facebook API error: {str(e)}',
+            'videos': []
+        }), 500
+        
+    except Exception as e:
+        print(f"❌ Test failed: {str(e)}")
+        traceback.print_exc()
+        
+        return jsonify({
+            'success': False,
+            'test_status': 'error',
+            'error': str(e),
+            'videos': []
+        }), 500
+
+
+# ========================================
+# Facebook Video API - Direct Video URLs
+# ========================================
+
+@app.route('/api/facebook-videos-direct', methods=['GET'])
+def get_facebook_videos_direct():
+    """
+    Get Facebook videos with direct downloadable URLs
+    
+    Query Parameters:
+    - date_preset: "today" | "yesterday" | "last_7d" | "last_30d" (default: "today")
+    - limit: Maximum number of videos (default: 50)
+    - ad_id: Specific ad ID (optional)
+    
+    Returns videos with:
+    - Direct video source URL (downloadable)
+    - Thumbnail URL
+    - Public permalink
+    - Ad performance data
+    
+    Example:
+        GET /api/facebook-videos-direct?date_preset=today
+        GET /api/facebook-videos-direct?ad_id=120232539320390180
+    """
+    try:
+        # Get environment variables
+        access_token = os.getenv('FACEBOOK_ACCESS_TOKEN')
+        page_access_token = os.getenv('FACEBOOK_PAGE_ACCESS_TOKEN')
+        ad_account_id = os.getenv('FACEBOOK_AD_ACCOUNT_ID')
+        
+        if not access_token or not ad_account_id:
+            return jsonify({
+                'success': False,
+                'error': 'Missing Facebook credentials',
+                'videos': []
+            }), 400
+        
+        # Use Page Access Token for video fetching if available, otherwise use regular token
+        video_token = page_access_token if page_access_token else access_token
+        
+        # Get query parameters
+        date_preset = request.args.get('date_preset', 'today')
+        limit = request.args.get('limit', type=int, default=50)
+        ad_id_filter = request.args.get('ad_id')
+        
+        print(f"🎥 Fetching videos from Facebook Ads (date_preset: {date_preset})")
+        
+        # Get date range
+        since, until = get_date_range(date_preset)
+        
+        videos_data = []
+        
+        # Build Graph API URL for insights
+        insights_url = f'https://graph.facebook.com/v24.0/{ad_account_id}/insights'
+        insights_params = {
+            'level': 'ad',
+            'fields': 'ad_id,ad_name,adset_name,campaign_name,spend,impressions,clicks,reach',
+            'access_token': access_token,
+            'limit': limit
+        }
+        
+        # Add time range - use time_range for custom dates or date_preset for presets
+        if since and until:
+            insights_params['time_range'] = json.dumps({
+                'since': since,
+                'until': until
+            })
+        else:
+            insights_params['date_preset'] = date_preset
+        
+        # Add ad_id filter if specified
+        if ad_id_filter:
+            insights_params['filtering'] = json.dumps([{
+                'field': 'ad.id',
+                'operator': 'EQUAL',
+                'value': ad_id_filter
+            }])
+        
+        print(f"📡 API Request: {insights_url}")
+        print(f"   Parameters: level=ad, date_preset={date_preset}, limit={limit}")
+        
+        # Fetch insights
+        insights_response = requests.get(insights_url, params=insights_params, timeout=30)
+        insights_response.raise_for_status()
+        insights_data = insights_response.json().get('data', [])
+        
+        if not insights_data:
+            print(f"⚠️ No ads found with date_preset={date_preset}")
+            print(f"   Try: today, yesterday, last_7d, last_30d, maximum")
+        
+        print(f"📊 Found {len(insights_data)} ads")
+        
+        # Process each ad to get video
+        for insight in insights_data:
+            ad_id = insight.get('ad_id')
+            if not ad_id:
+                continue
+            
+            try:
+                # Get ad creative with video info
+                creative_url = f'https://graph.facebook.com/v24.0/{ad_id}'
+                creative_params = {
+                    'fields': 'creative{video_id,thumbnail_url,object_story_spec}',
+                    'access_token': access_token
+                }
+                
+                creative_response = requests.get(creative_url, params=creative_params)
+                if not creative_response.ok:
+                    continue
+                
+                creative_data = creative_response.json()
+                creative = creative_data.get('creative', {})
+                video_id = creative.get('video_id')
+                
+                if not video_id:
+                    continue
+                
+                # Get video details with source URL (use Page Access Token for video file access)
+                video_url = f'https://graph.facebook.com/v24.0/{video_id}'
+                video_params = {
+                    'fields': 'source,title,description,length,picture,permalink_url,created_time,format,embed_html,status',
+                    'access_token': video_token  # Use Page Access Token instead of Ads Token
+                }
+                
+                video_response = requests.get(video_url, params=video_params, timeout=10)
+                if not video_response.ok:
+                    error_detail = video_response.json() if video_response.text else {}
+                    error_msg = error_detail.get('error', {}).get('message', 'Unknown error')
+                    print(f"   ⚠️ Failed to fetch video {video_id}: {video_response.status_code} - {error_msg}")
+                    
+                    # Still add video info with limited data (thumbnail and permalink only)
+                    video_info = {
+                        'ad_id': ad_id,
+                        'ad_name': insight.get('ad_name'),
+                        'adset_name': insight.get('adset_name'),
+                        'campaign_name': insight.get('campaign_name'),
+                        'video_id': video_id,
+                        'video_title': insight.get('ad_name'),
+                        'video_source_url': None,
+                        'video_permalink': f'https://www.facebook.com/{video_id}',
+                        'thumbnail_url': creative.get('thumbnail_url'),
+                        'error': f'Cannot access video: {error_msg}',
+                        'ad_performance': {
+                            'spend': insight.get('spend', '0'),
+                            'impressions': insight.get('impressions', '0'),
+                            'clicks': insight.get('clicks', '0'),
+                            'reach': insight.get('reach', '0')
+                        },
+                        'download_instructions': {
+                            'note': 'Video details unavailable. This may be due to: 1) Missing permissions (needs pages_read_engagement), 2) Video is private/deleted, or 3) Video belongs to a page you don\'t have access to',
+                            'alternative': 'Try viewing at: https://business.facebook.com/adsmanager'
+                        }
+                    }
+                    videos_data.append(video_info)
+                    continue
+                
+                video_data = video_response.json()
+                
+                # Get the best quality video format if available
+                video_source = video_data.get('source')  # Direct video URL
+                video_formats = video_data.get('format', [])
+                
+                # Try to get HD video if available
+                hd_video_url = None
+                sd_video_url = None
+                if video_formats and isinstance(video_formats, list):
+                    # Sort by height to get highest quality
+                    sorted_formats = sorted(
+                        video_formats,
+                        key=lambda x: x.get('height', 0),
+                        reverse=True
+                    )
+                    if sorted_formats:
+                        hd_video_url = sorted_formats[0].get('embed_html') or sorted_formats[0].get('filter')
+                        # Get SD version as fallback
+                        if len(sorted_formats) > 1:
+                            sd_video_url = sorted_formats[-1].get('embed_html') or sorted_formats[-1].get('filter')
+                
+                # If source is not available, try to construct download URL from video ID
+                if not video_source:
+                    print(f"   ⚠️ No 'source' field for video {video_id}, using alternative method")
+                    # Try alternative: Use permalink or construct URL
+                    video_source = None  # Will use permalink instead
+                
+                # Build video info
+                video_info = {
+                    'ad_id': ad_id,
+                    'ad_name': insight.get('ad_name'),
+                    'adset_name': insight.get('adset_name'),
+                    'campaign_name': insight.get('campaign_name'),
+                    'video_id': video_id,
+                    'video_title': video_data.get('title', insight.get('ad_name')),
+                    'video_description': video_data.get('description', ''),
+                    'video_length': video_data.get('length', 0),
+                    'video_source_url': video_source,  # Direct downloadable URL (may be None if no permission)
+                    'video_hd_url': hd_video_url,  # HD version if available
+                    'video_sd_url': sd_video_url,  # SD version as fallback
+                    'video_permalink': video_data.get('permalink_url'),  # Public Facebook link
+                    'thumbnail_url': video_data.get('picture', creative.get('thumbnail_url')),
+                    'embed_html': video_data.get('embed_html', ''),
+                    'created_time': video_data.get('created_time'),
+                    'video_status': video_data.get('status', {}).get('video_status'),
+                    'ad_performance': {
+                        'spend': insight.get('spend', '0'),
+                        'impressions': insight.get('impressions', '0'),
+                        'clicks': insight.get('clicks', '0'),
+                        'reach': insight.get('reach', '0')
+                    },
+                    'download_instructions': {
+                        'method_1': f'Direct: curl -o video.mp4 "{video_source}"' if video_source else 'Source URL not available - requires additional permissions',
+                        'method_2': f'With token: curl -o video.mp4 "{video_source}?access_token=YOUR_TOKEN"' if video_source else None,
+                        'method_3': f'Public link: {video_data.get("permalink_url")}',
+                        'note': 'If video_source_url is null, your access token needs pages_read_engagement permission or the video is not public'
+                    }
+                }
+                
+                videos_data.append(video_info)
+                print(f"✅ Found video: {video_info['video_title']}")
+                
+            except Exception as e:
+                print(f"⚠️ Error processing ad {ad_id}: {str(e)}")
+                continue
+        
+        print(f"🎬 Total videos found: {len(videos_data)}")
+        
+        # Build response
+        response = {
+            'success': True,
+            'date_preset': date_preset,
+            'date_range': {'since': since, 'until': until},
+            'videos': videos_data,
+            'total_videos': len(videos_data),
+            'timestamp': datetime.now().isoformat(),
+            'usage_note': 'Use video_source_url for direct download. Some URLs may require access_token parameter.',
+            'download_example': f'wget "{{video_source_url}}?access_token={access_token[:20]}..."'
+        }
+        
+        return jsonify(response)
+        
+    except requests.exceptions.RequestException as e:
+        error_message = f"Facebook API request failed: {str(e)}"
+        print(f"❌ {error_message}")
+        
+        return jsonify({
+            'success': False,
+            'error': error_message,
+            'videos': []
+        }), 500
+        
+    except Exception as e:
+        error_message = str(e)
+        print(f"❌ Error in /api/facebook-videos-direct: {error_message}")
+        traceback.print_exc()
+        
+        return jsonify({
+            'success': False,
+            'error': error_message,
+            'videos': []
+        }), 500
+
+
+# ========================================
+# Facebook Video API
+# ========================================
+
+@app.route('/api/facebook-videos', methods=['GET'])
+def get_facebook_videos():
+    """
+    Get Facebook videos from ads
+    
+    Query Parameters:
+    - ad_id: Facebook Ad ID (optional, if not provided will get all ads with videos)
+    - level: "ad" (default) | "adset" | "campaign"
+    - date_preset: "today" | "yesterday" | "last_7d" | "last_30d" (default: "last_7d")
+    - limit: Maximum number of videos to return (default: 50)
+    
+    Example:
+        GET /api/facebook-videos
+        GET /api/facebook-videos?ad_id=120232539320390180
+        GET /api/facebook-videos?date_preset=last_30d&limit=100
+    """
+    try:
+        # Get environment variables
+        access_token = os.getenv('FACEBOOK_ACCESS_TOKEN')
+        ad_account_id = os.getenv('FACEBOOK_AD_ACCOUNT_ID')
+        app_id = os.getenv('FACEBOOK_APP_ID', '1086145253509335')
+        
+        if not access_token or not ad_account_id:
+            return jsonify({
+                'success': False,
+                'error': 'Missing Facebook credentials. Please set FACEBOOK_ACCESS_TOKEN and FACEBOOK_AD_ACCOUNT_ID',
+                'videos': [],
+                'timestamp': datetime.now().isoformat()
+            }), 400
+        
+        # Get query parameters
+        ad_id_param = request.args.get('ad_id')
+        level = request.args.get('level', 'ad')
+        date_preset = request.args.get('date_preset', 'last_7d')
+        limit = request.args.get('limit', type=int, default=50)
+        
+        # Get date range
+        since, until = get_date_range(date_preset)
+        
+        print(f"📹 Fetching Facebook videos from {since} to {until}")
+        
+        # Initialize Facebook API
+        FacebookAdsApi.init(access_token=access_token)
+        
+        videos_data = []
+        
+        if ad_id_param:
+            # Get video from specific ad
+            try:
+                from facebook_business.adobjects.ad import Ad
+                
+                ad = Ad(ad_id_param)
+                
+                # Get ad creative
+                ad_data = ad.api_get(fields=[
+                    'id',
+                    'name',
+                    'creative',
+                    'status'
+                ])
+                
+                if 'creative' in ad_data and ad_data['creative']:
+                    creative_id = ad_data['creative']['id']
+                    
+                    # Get creative details including video
+                    from facebook_business.adobjects.adcreative import AdCreative
+                    creative = AdCreative(creative_id)
+                    creative_data = creative.api_get(fields=[
+                        'id',
+                        'name',
+                        'object_story_spec',
+                        'video_id',
+                        'thumbnail_url',
+                        'title',
+                        'body'
+                    ])
+                    
+                    # Get video details if available
+                    video_id = creative_data.get('video_id')
+                    if video_id:
+                        from facebook_business.adobjects.advideo import AdVideo
+                        video = AdVideo(video_id)
+                        video_data = video.api_get(fields=[
+                            'id',
+                            'title',
+                            'description',
+                            'length',
+                            'source',
+                            'picture',
+                            'embed_html',
+                            'created_time',
+                            'updated_time',
+                            'permalink_url'
+                        ])
+                        
+                        videos_data.append({
+                            'ad_id': ad_id_param,
+                            'ad_name': ad_data.get('name'),
+                            'video_id': video_id,
+                            'video_title': video_data.get('title'),
+                            'video_description': video_data.get('description'),
+                            'video_length': video_data.get('length'),
+                            'video_url': video_data.get('source'),
+                            'video_permalink': video_data.get('permalink_url'),
+                            'thumbnail_url': video_data.get('picture'),
+                            'embed_html': video_data.get('embed_html'),
+                            'created_time': video_data.get('created_time'),
+                            'updated_time': video_data.get('updated_time')
+                        })
+                
+            except Exception as e:
+                print(f"⚠️ Error fetching video for ad {ad_id_param}: {str(e)}")
+        
+        else:
+            # Get all ads with videos
+            account = AdAccount(ad_account_id)
+            
+            # Get insights to find ads
+            params = {
+                'level': level,
+                'time_range': {'since': since, 'until': until},
+                'limit': limit,
+                'filtering': [
+                    {
+                        'field': 'impressions',
+                        'operator': 'GREATER_THAN',
+                        'value': 0
+                    }
+                ]
+            }
+            
+            fields = [
+                'ad_id',
+                'ad_name',
+                'adset_id',
+                'adset_name',
+                'campaign_id',
+                'campaign_name'
+            ]
+            
+            insights = account.get_insights(fields=fields, params=params)
+            
+            # Process each ad to check for videos
+            from facebook_business.adobjects.ad import Ad
+            from facebook_business.adobjects.adcreative import AdCreative
+            from facebook_business.adobjects.advideo import AdVideo
+            
+            for insight in insights:
+                try:
+                    ad_id = insight.get('ad_id')
+                    if not ad_id:
+                        continue
+                    
+                    ad = Ad(ad_id)
+                    ad_data = ad.api_get(fields=['id', 'name', 'creative'])
+                    
+                    if 'creative' in ad_data and ad_data['creative']:
+                        creative_id = ad_data['creative']['id']
+                        
+                        try:
+                            creative = AdCreative(creative_id)
+                            creative_data = creative.api_get(fields=[
+                                'video_id',
+                                'thumbnail_url',
+                                'title',
+                                'body'
+                            ])
+                            
+                            video_id = creative_data.get('video_id')
+                            if video_id:
+                                try:
+                                    video = AdVideo(video_id)
+                                    video_data = video.api_get(fields=[
+                                        'id',
+                                        'title',
+                                        'description',
+                                        'length',
+                                        'source',
+                                        'picture',
+                                        'embed_html',
+                                        'created_time',
+                                        'updated_time',
+                                        'permalink_url'
+                                    ])
+                                    
+                                    videos_data.append({
+                                        'ad_id': ad_id,
+                                        'ad_name': insight.get('ad_name'),
+                                        'adset_name': insight.get('adset_name'),
+                                        'campaign_name': insight.get('campaign_name'),
+                                        'video_id': video_id,
+                                        'video_title': video_data.get('title'),
+                                        'video_description': video_data.get('description'),
+                                        'video_length': video_data.get('length'),
+                                        'video_url': video_data.get('source'),
+                                        'video_permalink': video_data.get('permalink_url'),
+                                        'thumbnail_url': video_data.get('picture'),
+                                        'embed_html': video_data.get('embed_html'),
+                                        'created_time': video_data.get('created_time'),
+                                        'updated_time': video_data.get('updated_time')
+                                    })
+                                    
+                                except Exception as e:
+                                    print(f"⚠️ Error fetching video {video_id}: {str(e)}")
+                                    
+                        except Exception as e:
+                            print(f"⚠️ Error fetching creative {creative_id}: {str(e)}")
+                            
+                except Exception as e:
+                    print(f"⚠️ Error processing ad: {str(e)}")
+                    continue
+        
+        print(f"✅ Successfully fetched {len(videos_data)} videos from Facebook Ads")
+        
+        # Build response
+        response = {
+            'success': True,
+            'app_id': app_id,
+            'date_range': {'since': since, 'until': until},
+            'videos': videos_data,
+            'total_videos': len(videos_data),
+            'timestamp': datetime.now().isoformat(),
+            'usage_notes': {
+                'video_url': 'Direct video file URL (may require authentication)',
+                'video_permalink': 'Public Facebook video link',
+                'embed_html': 'HTML embed code for the video',
+                'thumbnail_url': 'Video thumbnail image URL'
+            }
+        }
+        
+        return jsonify(response)
+        
+    except Exception as e:
+        error_message = str(e)
+        print(f"❌ Error in /api/facebook-videos: {error_message}")
+        traceback.print_exc()
+        
+        return jsonify({
+            'success': False,
+            'error': error_message,
+            'videos': [],
+            'timestamp': datetime.now().isoformat()
+        }), 500
+
+
+# ========================================
 # Google Sheets Data API (เคสได้ชื่อเบอร์)
 # ========================================
 
@@ -2156,6 +3053,308 @@ def batch_update_call_counts():
         }), 500
 
 
+# ========================================
+# MP4 to MP3 Converter API
+# ========================================
+
+@app.route('/api/convert/mp4-to-mp3', methods=['POST'])
+def convert_mp4_to_mp3():
+    """
+    Convert MP4 video to MP3 audio file
+    
+    Methods:
+    - POST: Upload file and convert
+    
+    Request:
+    - Upload file: multipart/form-data with 'file' parameter
+    
+    Query Parameters:
+    - bitrate: Audio bitrate (default: '192k'), e.g., '128k', '192k', '320k'
+    - sample_rate: Sample rate (default: 44100), e.g., 22050, 44100, 48000
+    
+    Response:
+    - Returns MP3 file for download
+    
+    Examples:
+    ```bash
+    # Basic conversion
+    curl -X POST -F "file=@input.mp4" http://localhost:5000/api/convert/mp4-to-mp3
+    
+    # With custom bitrate
+    curl -X POST -F "file=@input.mp4" http://localhost:5000/api/convert/mp4-to-mp3?bitrate=320k
+    
+    # With custom sample rate
+    curl -X POST -F "file=@input.mp4" http://localhost:5000/api/convert/mp4-to-mp3?sample_rate=48000
+    ```
+    """
+    try:
+        # ตรวจสอบว่ามีไฟล์ upload
+        if 'file' not in request.files:
+            return jsonify({
+                'success': False,
+                'error': 'No file provided. Please upload MP4 file with "file" parameter.',
+                'status': 'error',
+                'timestamp': datetime.now().isoformat()
+            }), 400
+        
+        file = request.files['file']
+        
+        # ตรวจสอบชื่อไฟล์
+        if file.filename == '':
+            return jsonify({
+                'success': False,
+                'error': 'No file selected.',
+                'status': 'error',
+                'timestamp': datetime.now().isoformat()
+            }), 400
+        
+        # ตรวจสอบนามสกุลไฟล์
+        filename = file.filename.lower()
+        if not filename.endswith('.mp4'):
+            return jsonify({
+                'success': False,
+                'error': f'Invalid file format. Expected .mp4, got .{filename.split(".")[-1]}',
+                'status': 'error',
+                'timestamp': datetime.now().isoformat()
+            }), 400
+        
+        # Get parameters
+        bitrate = request.args.get('bitrate', '192k')
+        sample_rate = request.args.get('sample_rate', '44100', type=int)
+        
+        # ตรวจสอบ bitrate format
+        valid_bitrates = ['128k', '192k', '256k', '320k']
+        if bitrate not in valid_bitrates:
+            return jsonify({
+                'success': False,
+                'error': f'Invalid bitrate. Choose from: {", ".join(valid_bitrates)}',
+                'status': 'error',
+                'timestamp': datetime.now().isoformat()
+            }), 400
+        
+        # ตรวจสอบ sample rate
+        valid_sample_rates = [22050, 44100, 48000]
+        if sample_rate not in valid_sample_rates:
+            return jsonify({
+                'success': False,
+                'error': f'Invalid sample rate. Choose from: {", ".join(map(str, valid_sample_rates))}',
+                'status': 'error',
+                'timestamp': datetime.now().isoformat()
+            }), 400
+        
+        start_time = datetime.now()
+        
+        # สร้าง temporary directory
+        temp_dir = tempfile.mkdtemp(prefix='mp4_to_mp3_')
+        
+        try:
+            # Save uploaded MP4 file
+            mp4_path = os.path.join(temp_dir, 'input.mp4')
+            file.save(mp4_path)
+            
+            # ตรวจสอบขนาดไฟล์
+            file_size = os.path.getsize(mp4_path)
+            max_size = 500 * 1024 * 1024  # 500 MB
+            
+            if file_size > max_size:
+                return jsonify({
+                    'success': False,
+                    'error': f'File too large. Maximum size is 500MB, got {file_size / (1024*1024):.2f}MB',
+                    'status': 'error',
+                    'timestamp': datetime.now().isoformat()
+                }), 413
+            
+        try:
+            # Load video and extract audio
+            if VideoFileClip is None:
+                raise ImportError("moviepy not properly installed")
+            
+            video = VideoFileClip(mp4_path)
+            
+            # Get audio
+            if video.audio is None:
+                return jsonify({
+                    'success': False,
+                    'error': 'Video has no audio track',
+                    'status': 'error',
+                    'timestamp': datetime.now().isoformat()
+                }), 400
+            
+            # Output MP3 path
+            output_filename = Path(filename).stem + '.mp3'
+            mp3_path = os.path.join(temp_dir, 'output.mp3')
+            
+            # Extract audio
+            audio = video.audio
+            
+            # Write audio to MP3
+            audio.write_audiofile(
+                mp3_path,
+                verbose=False,
+                logger=None,
+                fps=sample_rate
+            )
+            
+            # Close video
+            video.close()
+            
+            # Check if MP3 was created
+            if not os.path.exists(mp3_path):
+                return jsonify({
+                    'success': False,
+                    'error': 'Failed to create MP3 file',
+                    'status': 'error',
+                    'timestamp': datetime.now().isoformat()
+                }), 500
+            
+            # Get output file size
+            output_size = os.path.getsize(mp3_path)
+            conversion_time = (datetime.now() - start_time).total_seconds()
+            
+            print(f"✅ Conversion successful!")
+            print(f"   Output: {output_filename} ({output_size / (1024*1024):.2f}MB)")
+            print(f"   Time: {conversion_time:.2f}s")
+            
+            # Send file
+            response = send_file(
+                mp3_path,
+                as_attachment=True,
+                download_name=output_filename,
+                mimetype='audio/mpeg'
+            )
+            
+            # Set headers
+            response.headers['X-Conversion-Time'] = str(conversion_time)
+            response.headers['X-Output-Size'] = str(output_size)
+            response.headers['X-Bitrate'] = bitrate
+            
+            # Clean up in background (after response is sent)
+            @response.call_on_close
+            def cleanup():
+                try:
+                    shutil.rmtree(temp_dir)
+                    print(f"🗑️  Cleaned up temporary files")
+                except Exception as e:
+                    print(f"⚠️  Error cleaning up: {e}")
+            
+            return response
+            
+        except ImportError as e:
+            print(f"❌ ImportError: {e}")
+            print("   Make sure imageio is installed: pip install imageio")
+            
+            shutil.rmtree(temp_dir, ignore_errors=True)
+            
+            return jsonify({
+                'success': False,
+                'error': 'FFmpeg or imageio not installed. Please install them: pip install imageio[ffmpeg]',
+                'status': 'error',
+                'timestamp': datetime.now().isoformat()
+            }), 500
+            
+        except Exception as e:
+            print(f"❌ Conversion error: {e}")
+            traceback.print_exc()
+            
+            # Cleanup
+            shutil.rmtree(temp_dir, ignore_errors=True)
+            
+            return jsonify({
+                'success': False,
+                'error': str(e),
+                'status': 'error',
+                'timestamp': datetime.now().isoformat()
+            }), 500
+    
+    except Exception as e:
+        error_message = str(e)
+        print(f"❌ Error in /api/convert/mp4-to-mp3: {error_message}")
+        traceback.print_exc()
+        
+        return jsonify({
+            'success': False,
+            'error': error_message,
+            'status': 'error',
+            'timestamp': datetime.now().isoformat()
+        }), 500
+
+
+@app.route('/api/convert/info', methods=['GET'])
+def get_converter_info():
+    """
+    Get information about the converter API
+    
+    Returns:
+    - Supported formats
+    - API endpoints
+    - Examples
+    """
+    return jsonify({
+        'success': True,
+        'service': 'Media Converter API',
+        'version': '1.0.0',
+        'endpoints': {
+            'POST /api/convert/mp4-to-mp3': 'Convert MP4 to MP3 (upload file)',
+            'GET /api/convert/info': 'Get converter information'
+        },
+        'supported_formats': {
+            'input': ['mp4', 'avi', 'mov', 'mkv', 'flv', 'webm'],
+            'output': ['mp3']
+        },
+        'parameters': {
+            'bitrate': {
+                'description': 'Audio bitrate',
+                'default': '192k',
+                'options': ['128k', '192k', '256k', '320k']
+            },
+            'sample_rate': {
+                'description': 'Audio sample rate (Hz)',
+                'default': 44100,
+                'options': [22050, 44100, 48000]
+            }
+        },
+        'limits': {
+            'max_file_size': '500MB',
+            'max_duration': 'unlimited'
+        },
+        'examples': {
+            'basic': 'curl -X POST -F "file=@input.mp4" http://localhost:5000/api/convert/mp4-to-mp3',
+            'high_quality': 'curl -X POST -F "file=@input.mp4" http://localhost:5000/api/convert/mp4-to-mp3?bitrate=320k',
+            'custom_sample_rate': 'curl -X POST -F "file=@input.mp4" http://localhost:5000/api/convert/mp4-to-mp3?sample_rate=48000'
+        },
+        'response_headers': {
+            'X-Conversion-Time': 'Conversion time in seconds',
+            'X-Output-Size': 'Output file size in bytes',
+            'X-Bitrate': 'Audio bitrate used'
+        },
+        'timestamp': datetime.now().isoformat()
+    })
+
+
+# ========================================
+# Error Handlers
+# ========================================
+
+@app.route('/api/convert/mp4-to-mp3', methods=['GET'])
+def convert_mp4_to_mp3_get_help():
+    """GET endpoint for /api/convert/mp4-to-mp3 - show help"""
+    return jsonify({
+        'success': False,
+        'error': 'This endpoint requires POST method with file upload',
+        'method': 'POST',
+        'content_type': 'multipart/form-data',
+        'parameters': {
+            'file': 'MP4 file to convert (required)',
+            'bitrate': 'Audio bitrate (optional, default: 192k)',
+            'sample_rate': 'Sample rate in Hz (optional, default: 44100)'
+        },
+        'example_curl': 'curl -X POST -F "file=@input.mp4" http://localhost:5000/api/convert/mp4-to-mp3',
+        'help_url': '/api/convert/info'
+    }), 405
+
+
+# ========================================
+# Error Handlers
 # ========================================
 # Error Handlers
 # ========================================

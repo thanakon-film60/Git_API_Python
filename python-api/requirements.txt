@@ -14,4 +14,8 @@ grpcio==1.62.3
 grpcio-status==1.62.3
 protobuf==4.25.8
 psycopg2-binary==2.9.9
+moviepy==1.0.3
+pydub==0.25.1
+imageio==2.33.1
+imageio-ffmpeg==0.4.10
 pytz==2023.3

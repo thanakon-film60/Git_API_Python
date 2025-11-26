@@ -65,19 +65,21 @@ npm run dev
 
 ## 📡 API Endpoints
 
-| Endpoint                      | Method | คำอธิบาย                                                       |
-| ----------------------------- | ------ | -------------------------------------------------------------- |
-| `/`                           | GET    | ข้อมูลเกี่ยวกับ API                                            |
-| `/health`                     | GET    | Health check และ cache status                                  |
-| `/api/film-data`              | GET    | ดึงข้อมูลจาก Google Sheets                                     |
-| `/api/clear-cache`            | POST   | Clear cache (รีเฟรชข้อมูลใหม่)                                 |
-| `/api/facebook-ads-campaigns` | GET    | ดึงข้อมูลจาก Facebook Ads Manager                              |
-| `/api/facebook-ads-manager`   | GET    | Alias สำหรับ Facebook Ads (เหมือน /api/facebook-ads-campaigns) |
-| `/api/google-sheets-data`     | GET    | ดึงข้อมูลจากชีท 'เคสได้ชื่อเบอร์'                              |
-| `/api/google-ads`             | GET    | ดึงข้อมูลจาก Google Ads                                        |
-| `/run-time`                   | GET    | ดึงสถิติการโทรจากชีท 'สรุป call_AI'                            |
-| `/N_SaleIncentive_data`       | GET    | ดึงข้อมูล Sale Incentive                                       |
-| `/data_bjh`                   | GET    | ดึงข้อมูล Leads จากฐานข้อมูล PostgreSQL                        |
+| Endpoint                       | Method | คำอธิบาย                                                       |
+| ------------------------------ | ------ | -------------------------------------------------------------- |
+| `/`                            | GET    | ข้อมูลเกี่ยวกับ API                                            |
+| `/health`                      | GET    | Health check และ cache status                                  |
+| `/api/film-data`               | GET    | ดึงข้อมูลจาก Google Sheets                                     |
+| `/api/clear-cache`             | POST   | Clear cache (รีเฟรชข้อมูลใหม่)                                 |
+| `/api/facebook-ads-campaigns`  | GET    | ดึงข้อมูลจาก Facebook Ads Manager (SDK)                        |
+| `/api/facebook-ads-manager`    | GET    | Alias สำหรับ Facebook Ads (เหมือน /api/facebook-ads-campaigns) |
+| `/api/facebook-graph-insights` | GET    | ดึงข้อมูล Facebook Ads โดยตรงจาก Graph API v24.0 (พร้อมวิดีโอ) |
+| `/api/facebook-videos`         | GET    | ดึงวิดีโอจาก Facebook Ads พร้อม download URLs                  |
+| `/api/google-sheets-data`      | GET    | ดึงข้อมูลจากชีท 'เคสได้ชื่อเบอร์'                              |
+| `/api/google-ads`              | GET    | ดึงข้อมูลจาก Google Ads                                        |
+| `/run-time`                    | GET    | ดึงสถิติการโทรจากชีท 'สรุป call_AI'                            |
+| `/N_SaleIncentive_data`        | GET    | ดึงข้อมูล Sale Incentive                                       |
+| `/data_bjh`                    | GET    | ดึงข้อมูล Leads จากฐานข้อมูล PostgreSQL                        |
 
 ---
 
