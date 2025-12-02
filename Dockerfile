@@ -7,7 +7,7 @@ WORKDIR /app
 # Copy requirements first for better caching
 COPY python-api/requirements.txt .
 
-# Install dependencies with increased timeout and retry
+# Install dependencies with increased timeout and retry (v2 - force rebuild)
 RUN pip install --upgrade pip && \
     pip install --no-cache-dir --default-timeout=300 --retries 5 -r requirements.txt
 
