@@ -17,5 +17,5 @@ psycopg2-binary==2.9.9
 moviepy==1.0.3
 pydub==0.25.1
 imageio==2.33.1
-imageio-ffmpeg==0.4.10
+imageio-ffmpeg==0.5.1
 pytz==2023.3
