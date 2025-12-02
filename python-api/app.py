@@ -3157,6 +3157,7 @@ def convert_mp4_to_mp3():
             max_size = 500 * 1024 * 1024  # 500 MB
             
             if file_size > max_size:
+                shutil.rmtree(temp_dir, ignore_errors=True)
                 return jsonify({
                     'success': False,
                     'error': f'File too large. Maximum size is 500MB, got {file_size / (1024*1024):.2f}MB',
@@ -3164,7 +3165,6 @@ def convert_mp4_to_mp3():
                     'timestamp': datetime.now().isoformat()
                 }), 413
             
-        try:
             # Load video and extract audio
             if VideoFileClip is None:
                 raise ImportError("moviepy not properly installed")
