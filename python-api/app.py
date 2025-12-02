@@ -1036,27 +1036,49 @@ def get_facebook_ads_campaigns():
     Get Facebook Ads campaigns data (Optimized with caching)
     
     Query Parameters:
+    - ad_account_id: Facebook Ad Account ID (optional, ใช้ค่าจาก env หากไม่ระบุ)
     - level: "campaign" | "adset" | "ad" (default: "campaign")
     - date_preset: "today" | "yesterday" | "last_7d" | "last_30d" | "this_month" | "last_month"
     - time_range: JSON string {"since": "YYYY-MM-DD", "until": "YYYY-MM-DD"}
     - time_increment: "1" for daily breakdown, "monthly" for monthly (optional)
     - action_breakdowns: comma-separated (e.g., "action_type")
+    - filtering: JSON array for filtering (e.g., action_type filters)
     - fields: Comma-separated list of additional fields (optional)
     - limit: Maximum number of records to return (optional, default: 1000)
     - no_cache: "true" to bypass cache (optional)
+    
+    Example:
+        GET /api/facebook-ads-campaigns?level=ad&date_preset=today
+        GET /api/facebook-ads-campaigns?ad_account_id=act_869492750129928&level=ad&date_preset=today
+        GET /api/facebook-ads-campaigns?level=ad&action_breakdowns=action_type&date_preset=today
     """
     try:
         # Get environment variables
         access_token = os.getenv('FACEBOOK_ACCESS_TOKEN')
-        ad_account_id = os.getenv('FACEBOOK_AD_ACCOUNT_ID')
+        default_ad_account_id = os.getenv('FACEBOOK_AD_ACCOUNT_ID')
         
-        if not access_token or not ad_account_id:
+        # Get ad_account_id from query param or use default from env
+        ad_account_id = request.args.get('ad_account_id', default_ad_account_id)
+        
+        if not access_token:
             return jsonify({
                 'success': False,
-                'error': 'Missing Facebook credentials. Please set FACEBOOK_ACCESS_TOKEN and FACEBOOK_AD_ACCOUNT_ID',
+                'error': 'Missing FACEBOOK_ACCESS_TOKEN environment variable',
                 'data': [],
                 'timestamp': datetime.now().isoformat()
             }), 400
+        
+        if not ad_account_id:
+            return jsonify({
+                'success': False,
+                'error': 'Missing ad_account_id. Provide via query param or set FACEBOOK_AD_ACCOUNT_ID env variable',
+                'data': [],
+                'timestamp': datetime.now().isoformat()
+            }), 400
+        
+        # Ensure ad_account_id has "act_" prefix
+        if not ad_account_id.startswith('act_'):
+            ad_account_id = f'act_{ad_account_id}'
         
         # Get query parameters
         level = request.args.get('level', 'campaign')
