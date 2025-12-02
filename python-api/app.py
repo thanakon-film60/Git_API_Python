@@ -365,6 +365,7 @@ def index():
             '/api/clear-cache': 'Clear data cache (POST)',
             '/api/facebook-ads-campaigns': 'Get Facebook Ads campaigns data (supports level, date filtering, daily breakdown) (GET)',
             '/api/facebook-ads-manager': 'Alias for /api/facebook-ads-campaigns (GET)',
+            '/api/facebook-ads-insights': 'Get Facebook Ads Insights via Graph API v24.0 - simple and flexible (GET)',
             '/api/facebook-graph-insights': 'Get Facebook Ad insights via Graph API with video thumbnails (GET)',
             '/api/facebook-videos-direct': 'Get Facebook videos with direct downloadable URLs (แนะนำ) (GET)',
             '/api/facebook-videos': 'Get Facebook videos from ads (supports ad_id, date filtering) (GET)',
@@ -1270,6 +1271,294 @@ def get_facebook_ads_campaigns():
 def get_facebook_ads_manager():
     """Alias for /api/facebook-ads-campaigns"""
     return get_facebook_ads_campaigns()
+
+
+# ========================================
+# Facebook Ads Insights API - Simple Direct Call
+# ========================================
+
+@app.route('/api/facebook-ads-insights', methods=['GET'])
+def get_facebook_ads_insights():
+    """
+    Get Facebook Ads Insights via Graph API v24.0
+    ดึงข้อมูล insights ของ Facebook Ads โดยตรงจาก Graph API
+    
+    Query Parameters:
+    - ad_account_id: Ad Account ID (optional, ถ้าไม่ระบุจะใช้จาก env)
+    - level: "ad" | "adset" | "campaign" (default: "ad")
+    - date_preset: "today" | "yesterday" | "last_7d" | "last_14d" | "last_30d" | "this_month" | "last_month" (default: "today")
+    - since: วันที่เริ่มต้น format YYYY-MM-DD (optional, จะ override date_preset)
+    - until: วันที่สิ้นสุด format YYYY-MM-DD (optional, ใช้คู่กับ since)
+    - fields: comma-separated fields (optional, มี default fields)
+    - action_breakdowns: "action_type" เพื่อดู breakdown ของ actions (optional)
+    - limit: จำนวน records สูงสุด (default: 500)
+    - no_cache: "true" เพื่อข้าม cache (optional)
+    
+    Default Fields:
+    - ad_id, ad_name, adset_id, adset_name, campaign_id, campaign_name
+    - spend, impressions, clicks, ctr, cpc, cpm, actions
+    
+    Example:
+        GET /api/facebook-ads-insights
+        GET /api/facebook-ads-insights?level=ad&date_preset=today
+        GET /api/facebook-ads-insights?level=ad&date_preset=today&action_breakdowns=action_type
+        GET /api/facebook-ads-insights?ad_account_id=act_454323590676166&date_preset=today
+        GET /api/facebook-ads-insights?since=2025-11-01&until=2025-11-30
+    """
+    try:
+        # Get environment variables
+        access_token = os.getenv('FACEBOOK_ACCESS_TOKEN')
+        default_ad_account_id = os.getenv('FACEBOOK_AD_ACCOUNT_ID')
+        
+        if not access_token:
+            return jsonify({
+                'success': False,
+                'error': 'Missing FACEBOOK_ACCESS_TOKEN environment variable',
+                'data': [],
+                'timestamp': datetime.now().isoformat()
+            }), 400
+        
+        # Get query parameters
+        ad_account_id = request.args.get('ad_account_id', default_ad_account_id)
+        level = request.args.get('level', 'ad')
+        date_preset = request.args.get('date_preset', 'today')
+        since_param = request.args.get('since')
+        until_param = request.args.get('until')
+        custom_fields = request.args.get('fields')
+        action_breakdowns = request.args.get('action_breakdowns')
+        limit = request.args.get('limit', type=int, default=500)
+        no_cache = request.args.get('no_cache', '').lower() == 'true'
+        
+        # Validate ad_account_id
+        if not ad_account_id:
+            return jsonify({
+                'success': False,
+                'error': 'Missing ad_account_id. Please provide via query param or set FACEBOOK_AD_ACCOUNT_ID env variable',
+                'data': [],
+                'timestamp': datetime.now().isoformat()
+            }), 400
+        
+        # Ensure ad_account_id has "act_" prefix
+        if not ad_account_id.startswith('act_'):
+            ad_account_id = f'act_{ad_account_id}'
+        
+        # Validate level
+        valid_levels = ['ad', 'adset', 'campaign']
+        if level not in valid_levels:
+            return jsonify({
+                'success': False,
+                'error': f'Invalid level. Must be one of: {valid_levels}',
+                'data': [],
+                'timestamp': datetime.now().isoformat()
+            }), 400
+        
+        # Determine date range
+        if since_param and until_param:
+            since = since_param
+            until = until_param
+            date_type = 'custom'
+            use_time_range = True
+        else:
+            since, until = get_date_range(date_preset)
+            date_type = 'preset'
+            use_time_range = False
+        
+        # Create cache key
+        cache_key = f"insights_{ad_account_id}_{level}_{since}_{until}_{custom_fields}_{action_breakdowns}_{limit}"
+        
+        # Check cache
+        global fb_ads_cache
+        now = datetime.now()
+        
+        if not no_cache and cache_key in fb_ads_cache['data']:
+            if (cache_key in fb_ads_cache['expires_at'] and 
+                now < fb_ads_cache['expires_at'][cache_key]):
+                cached_response = fb_ads_cache['data'][cache_key].copy()
+                cached_response['cached'] = True
+                cached_response['cache_expires_in'] = (fb_ads_cache['expires_at'][cache_key] - now).seconds
+                print(f"✅ Returning cached Facebook Ads Insights (expires in {cached_response['cache_expires_in']}s)")
+                return jsonify(cached_response)
+        
+        print(f"📊 Fetching Facebook Ads Insights: account={ad_account_id}, level={level}, date={date_preset}")
+        
+        # Build fields list
+        if custom_fields:
+            fields_list = [f.strip() for f in custom_fields.split(',')]
+        else:
+            # Default fields based on level
+            fields_list = [
+                'spend',
+                'impressions',
+                'clicks',
+                'ctr',
+                'cpc',
+                'cpm',
+                'actions'
+            ]
+            
+            # Add level-specific fields
+            if level == 'ad':
+                fields_list = ['ad_id', 'ad_name', 'adset_id', 'adset_name', 'campaign_id', 'campaign_name'] + fields_list
+            elif level == 'adset':
+                fields_list = ['adset_id', 'adset_name', 'campaign_id', 'campaign_name'] + fields_list
+            elif level == 'campaign':
+                fields_list = ['campaign_id', 'campaign_name'] + fields_list
+        
+        # Build Graph API URL
+        api_version = 'v24.0'
+        base_url = f'https://graph.facebook.com/{api_version}/{ad_account_id}/insights'
+        
+        # Build params
+        params = {
+            'level': level,
+            'fields': ','.join(fields_list),
+            'access_token': access_token,
+            'limit': limit
+        }
+        
+        # Add date parameters
+        if use_time_range:
+            params['time_range'] = json.dumps({'since': since, 'until': until})
+        else:
+            params['date_preset'] = date_preset
+        
+        # Add action_breakdowns if specified
+        if action_breakdowns:
+            params['action_breakdowns'] = action_breakdowns
+        
+        print(f"📡 API Request: {base_url}")
+        print(f"   Level: {level}, Date: {date_preset if not use_time_range else f'{since} to {until}'}")
+        print(f"   Fields: {', '.join(fields_list)}")
+        if action_breakdowns:
+            print(f"   Action Breakdowns: {action_breakdowns}")
+        
+        # Make request to Graph API
+        response = requests.get(base_url, params=params, timeout=60)
+        
+        # Check for errors
+        if not response.ok:
+            error_data = response.json() if response.text else {}
+            error_msg = error_data.get('error', {}).get('message', f'HTTP {response.status_code}')
+            error_code = error_data.get('error', {}).get('code', 0)
+            error_type = error_data.get('error', {}).get('type', 'Unknown')
+            
+            print(f"❌ Facebook API Error: {error_msg}")
+            
+            return jsonify({
+                'success': False,
+                'error': error_msg,
+                'error_code': error_code,
+                'error_type': error_type,
+                'data': [],
+                'timestamp': datetime.now().isoformat()
+            }), 500
+        
+        result = response.json()
+        data = result.get('data', [])
+        
+        # Process actions for easier access
+        for item in data:
+            if 'actions' in item and item['actions']:
+                processed_actions = {}
+                for action in item['actions']:
+                    action_type = action.get('action_type', 'unknown')
+                    action_value = action.get('value', '0')
+                    processed_actions[action_type] = action_value
+                item['actions_breakdown'] = processed_actions
+        
+        # Calculate summary
+        total_spend = 0
+        total_impressions = 0
+        total_clicks = 0
+        total_leads = 0
+        total_messages = 0
+        
+        for item in data:
+            total_spend += float(item.get('spend', 0))
+            total_impressions += int(item.get('impressions', 0))
+            total_clicks += int(item.get('clicks', 0))
+            
+            # Count leads and messages from actions
+            if 'actions_breakdown' in item:
+                total_leads += int(item['actions_breakdown'].get('lead', 0))
+                total_messages += int(item['actions_breakdown'].get('onsite_conversion.messaging_conversation_started_7d', 0))
+        
+        # Build summary
+        summary = {
+            'total_spend': round(total_spend, 2),
+            'total_impressions': total_impressions,
+            'total_clicks': total_clicks,
+            'total_leads': total_leads,
+            'total_messages': total_messages,
+            'average_ctr': round((total_clicks / total_impressions) * 100, 2) if total_impressions > 0 else 0,
+            'average_cpc': round(total_spend / total_clicks, 2) if total_clicks > 0 else 0,
+            'average_cpm': round((total_spend / total_impressions) * 1000, 2) if total_impressions > 0 else 0,
+            'cost_per_lead': round(total_spend / total_leads, 2) if total_leads > 0 else 0
+        }
+        
+        print(f"✅ Successfully fetched {len(data)} {level}(s) from Facebook Ads")
+        print(f"   Summary: Spend={summary['total_spend']}, Impressions={summary['total_impressions']}, Clicks={summary['total_clicks']}")
+        
+        # Build response
+        api_response = {
+            'success': True,
+            'api_version': api_version,
+            'ad_account_id': ad_account_id,
+            'level': level,
+            'date_type': date_type,
+            'date_preset': date_preset if date_type == 'preset' else None,
+            'date_range': {
+                'since': since,
+                'until': until
+            },
+            'fields': fields_list,
+            'action_breakdowns': action_breakdowns,
+            'data': data,
+            'summary': summary,
+            'total_records': len(data),
+            'paging': result.get('paging', {}),
+            'timestamp': datetime.now().isoformat(),
+            'cached': False,
+            'cache_duration': FB_ADS_CACHE_DURATION
+        }
+        
+        # Save to cache
+        fb_ads_cache['data'][cache_key] = api_response.copy()
+        fb_ads_cache['timestamps'][cache_key] = now
+        fb_ads_cache['expires_at'][cache_key] = now + timedelta(seconds=FB_ADS_CACHE_DURATION)
+        
+        return jsonify(api_response)
+        
+    except requests.exceptions.Timeout:
+        return jsonify({
+            'success': False,
+            'error': 'Request timeout. Facebook API is slow.',
+            'data': [],
+            'timestamp': datetime.now().isoformat()
+        }), 500
+        
+    except requests.exceptions.RequestException as e:
+        error_message = f"Facebook API request failed: {str(e)}"
+        print(f"❌ {error_message}")
+        
+        return jsonify({
+            'success': False,
+            'error': error_message,
+            'data': [],
+            'timestamp': datetime.now().isoformat()
+        }), 500
+        
+    except Exception as e:
+        error_message = str(e)
+        print(f"❌ Error in /api/facebook-ads-insights: {error_message}")
+        traceback.print_exc()
+        
+        return jsonify({
+            'success': False,
+            'error': error_message,
+            'data': [],
+            'timestamp': datetime.now().isoformat()
+        }), 500
 
 
 # ========================================
