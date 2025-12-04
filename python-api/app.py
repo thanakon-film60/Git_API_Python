@@ -365,6 +365,7 @@ def index():
             '/api/clear-cache': 'Clear data cache (POST)',
             '/api/facebook-ads-campaigns': 'Get Facebook Ads campaigns data (supports level, date filtering, daily breakdown) (GET)',
             '/api/facebook-ads-manager': 'Alias for /api/facebook-ads-campaigns (GET)',
+            '/api/facebook-account-balance': 'Get Facebook Ad Account balance and info (GET)',
             '/api/facebook-ads-insights': 'Get Facebook Ads Insights via Graph API v24.0 (simple, supports level, date, custom fields) (GET)',
             '/api/facebook-graph-insights': 'Get Facebook Ad insights via Graph API with video thumbnails (GET)',
             '/api/facebook-videos-direct': 'Get Facebook videos with direct downloadable URLs (แนะนำ) (GET)',
@@ -1293,6 +1294,212 @@ def get_facebook_ads_campaigns():
 def get_facebook_ads_manager():
     """Alias for /api/facebook-ads-campaigns"""
     return get_facebook_ads_campaigns()
+
+
+# ========================================
+# Facebook Ad Account Balance API
+# ========================================
+
+@app.route('/api/facebook-account-balance', methods=['GET'])
+def get_facebook_account_balance():
+    """
+    Get Facebook Ad Account Balance and Account Info
+    ดึงข้อมูลยอดเงินคงเหลือและข้อมูลบัญชี Facebook Ads
+    
+    Query Parameters:
+    - ad_account_id: Facebook Ad Account ID (optional, ใช้ค่าจาก env หากไม่ระบุ)
+    
+    Example:
+        GET /api/facebook-account-balance
+        GET /api/facebook-account-balance?ad_account_id=act_869492750129928
+    
+    Response:
+    {
+        "success": true,
+        "account_id": "869492750129928",
+        "account_name": "Account Name",
+        "balance": 0.00,
+        "balance_display": "฿0.00 THB",
+        "currency": "THB",
+        "amount_spent": "0",
+        ...
+    }
+    """
+    try:
+        # Get environment variables
+        access_token = os.getenv('FACEBOOK_ACCESS_TOKEN')
+        default_ad_account_id = os.getenv('FACEBOOK_AD_ACCOUNT_ID')
+        
+        # Get ad_account_id from query param or use default from env
+        ad_account_id = request.args.get('ad_account_id', default_ad_account_id)
+        
+        if not access_token:
+            return jsonify({
+                'success': False,
+                'error': 'Missing FACEBOOK_ACCESS_TOKEN environment variable',
+                'data': None,
+                'timestamp': datetime.now().isoformat()
+            }), 400
+        
+        if not ad_account_id:
+            return jsonify({
+                'success': False,
+                'error': 'Missing ad_account_id. Provide via query param or set FACEBOOK_AD_ACCOUNT_ID env variable',
+                'data': None,
+                'timestamp': datetime.now().isoformat()
+            }), 400
+        
+        # Ensure ad_account_id has "act_" prefix
+        if not ad_account_id.startswith('act_'):
+            ad_account_id = f'act_{ad_account_id}'
+        
+        print(f"📊 Fetching Facebook Ad Account Balance: {ad_account_id}")
+        
+        # Build Graph API URL
+        api_version = 'v24.0'
+        base_url = f'https://graph.facebook.com/{api_version}/{ad_account_id}'
+        
+        # Fields to fetch
+        fields = [
+            'account_id',
+            'name',
+            'account_status',
+            'balance',
+            'amount_spent',
+            'currency',
+            'funding_source_details',
+            'min_daily_budget',
+            'spend_cap'
+        ]
+        
+        # Build params
+        params = {
+            'fields': ','.join(fields),
+            'access_token': access_token
+        }
+        
+        # Make request to Graph API
+        response = requests.get(base_url, params=params, timeout=30)
+        
+        # Check for errors
+        if not response.ok:
+            error_data = response.json() if response.text else {}
+            error_msg = error_data.get('error', {}).get('message', f'HTTP {response.status_code}')
+            error_code = error_data.get('error', {}).get('code', 0)
+            
+            print(f"❌ Facebook API Error: {error_msg}")
+            
+            return jsonify({
+                'success': False,
+                'error': error_msg,
+                'error_code': error_code,
+                'data': None,
+                'timestamp': datetime.now().isoformat()
+            }), 500
+        
+        data = response.json()
+        
+        # Extract balance from funding_source_details
+        balance_value = 0.0
+        balance_display = "฿0.00 THB"
+        currency = data.get('currency', 'THB')
+        
+        funding_source = data.get('funding_source_details', {})
+        if funding_source:
+            display_string = funding_source.get('display_string', '')
+            # Extract number from display_string like "ยอดคงเหลือที่ใช้ได้ (฿0.00 THB)"
+            if display_string:
+                import re
+                # Match pattern like ฿0.00 or ฿1,234.56
+                match = re.search(r'฿([\d,]+\.?\d*)', display_string)
+                if match:
+                    balance_str = match.group(1).replace(',', '')
+                    try:
+                        balance_value = float(balance_str)
+                    except ValueError:
+                        balance_value = 0.0
+                balance_display = f"฿{balance_value:,.2f} {currency}"
+        
+        # Also check 'balance' field (in cents/satang)
+        if 'balance' in data:
+            try:
+                # Facebook returns balance in smallest currency unit (satang for THB)
+                balance_cents = int(data.get('balance', 0))
+                if balance_cents > 0:
+                    balance_value = balance_cents / 100  # Convert to main unit
+                    balance_display = f"฿{balance_value:,.2f} {currency}"
+            except (ValueError, TypeError):
+                pass
+        
+        # Get account status text
+        account_status_map = {
+            1: 'ACTIVE',
+            2: 'DISABLED',
+            3: 'UNSETTLED',
+            7: 'PENDING_RISK_REVIEW',
+            8: 'PENDING_SETTLEMENT',
+            9: 'IN_GRACE_PERIOD',
+            100: 'PENDING_CLOSURE',
+            101: 'CLOSED',
+            201: 'ANY_ACTIVE',
+            202: 'ANY_CLOSED'
+        }
+        account_status_code = data.get('account_status', 0)
+        account_status_text = account_status_map.get(account_status_code, f'UNKNOWN ({account_status_code})')
+        
+        print(f"✅ Successfully fetched account balance: {balance_display}")
+        
+        # Build response
+        api_response = {
+            'success': True,
+            'ad_account_id': ad_account_id,
+            'account_id': data.get('account_id'),
+            'account_name': data.get('name'),
+            'account_status': account_status_text,
+            'account_status_code': account_status_code,
+            'balance': balance_value,
+            'balance_display': balance_display,
+            'currency': currency,
+            'amount_spent': data.get('amount_spent'),
+            'min_daily_budget': data.get('min_daily_budget'),
+            'spend_cap': data.get('spend_cap'),
+            'funding_source_details': funding_source,
+            'raw_data': data,
+            'timestamp': datetime.now().isoformat()
+        }
+        
+        return jsonify(api_response)
+        
+    except requests.exceptions.Timeout:
+        return jsonify({
+            'success': False,
+            'error': 'Request timeout. Facebook API is slow.',
+            'data': None,
+            'timestamp': datetime.now().isoformat()
+        }), 500
+        
+    except requests.exceptions.RequestException as e:
+        error_message = f"Facebook API request failed: {str(e)}"
+        print(f"❌ {error_message}")
+        
+        return jsonify({
+            'success': False,
+            'error': error_message,
+            'data': None,
+            'timestamp': datetime.now().isoformat()
+        }), 500
+        
+    except Exception as e:
+        error_message = str(e)
+        print(f"❌ Error in /api/facebook-account-balance: {error_message}")
+        traceback.print_exc()
+        
+        return jsonify({
+            'success': False,
+            'error': error_message,
+            'data': None,
+            'timestamp': datetime.now().isoformat()
+        }), 500
 
 
 # ========================================
