@@ -1,0 +1,327 @@
+<!DOCTYPE html>
+<html lang="th">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Thai ID Card Scanner - Railway Integration</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link
+      href="https://fonts.googleapis.com/css2?family=Sarabun:wght@300;400;500;600;700&display=swap"
+      rel="stylesheet"
+    />
+    <style>
+      body {
+        font-family: "Sarabun", sans-serif;
+      }
+    </style>
+  </head>
+  <body class="bg-gray-100 min-h-screen p-8">
+    <div class="max-w-4xl mx-auto">
+      <!-- Header -->
+      <div class="text-center mb-8">
+        <h1 class="text-3xl font-bold text-gray-800">
+          🎴 Thai ID Card Scanner
+        </h1>
+        <p class="text-gray-600 mt-2">สแกนบัตรประชาชนจากหน้าเว็บ Railway</p>
+      </div>
+
+      <!-- Status Card -->
+      <div id="statusCard" class="bg-white rounded-xl shadow-lg p-6 mb-6">
+        <h2 class="text-lg font-semibold mb-4">📡 สถานะการเชื่อมต่อ</h2>
+        <div class="grid grid-cols-2 gap-4">
+          <div class="flex items-center space-x-3">
+            <div
+              id="agentStatus"
+              class="w-4 h-4 rounded-full bg-gray-300"
+            ></div>
+            <span id="agentText">กำลังตรวจสอบ Local Agent...</span>
+          </div>
+          <div class="flex items-center space-x-3">
+            <div
+              id="readerStatus"
+              class="w-4 h-4 rounded-full bg-gray-300"
+            ></div>
+            <span id="readerText">กำลังตรวจสอบเครื่องอ่านบัตร...</span>
+          </div>
+        </div>
+        <div id="readerList" class="mt-4 text-sm text-gray-500 hidden"></div>
+      </div>
+
+      <!-- Scan Button -->
+      <div class="bg-white rounded-xl shadow-lg p-6 mb-6">
+        <div class="flex flex-col items-center">
+          <button
+            id="scanBtn"
+            onclick="scanCard()"
+            class="bg-gradient-to-r from-indigo-500 to-purple-600 text-white px-8 py-4 rounded-xl text-lg font-semibold hover:shadow-lg transition disabled:opacity-50"
+            disabled
+          >
+            <span id="scanBtnText">🔍 สแกนบัตรประชาชน</span>
+          </button>
+          <p class="text-sm text-gray-500 mt-3">
+            * กรุณาใส่บัตรในเครื่องอ่านก่อนกดสแกน
+          </p>
+        </div>
+      </div>
+
+      <!-- Instructions -->
+      <div
+        id="instructions"
+        class="bg-yellow-50 border border-yellow-200 rounded-xl p-6 mb-6"
+      >
+        <h3 class="font-semibold text-yellow-800 mb-3">📋 วิธีใช้งาน</h3>
+        <ol class="list-decimal list-inside space-y-2 text-yellow-700">
+          <li>
+            ดาวน์โหลดไฟล์
+            <code class="bg-yellow-100 px-2 py-1 rounded"
+              >thai_id_local_agent.py</code
+            >
+          </li>
+          <li>
+            ติดตั้ง:
+            <code class="bg-yellow-100 px-2 py-1 rounded"
+              >pip install flask flask-cors pyscard</code
+            >
+          </li>
+          <li>เสียบเครื่องอ่านบัตร GLINK เข้ากับ USB</li>
+          <li>
+            รัน:
+            <code class="bg-yellow-100 px-2 py-1 rounded"
+              >python thai_id_local_agent.py</code
+            >
+          </li>
+          <li>ใส่บัตรประชาชนในเครื่องอ่าน</li>
+          <li>กดปุ่ม "สแกนบัตรประชาชน"</li>
+        </ol>
+      </div>
+
+      <!-- Result Card -->
+      <div id="resultCard" class="bg-white rounded-xl shadow-lg p-6 hidden">
+        <h2 class="text-lg font-semibold mb-4">✅ ข้อมูลจากบัตรประชาชน</h2>
+
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+          <!-- Personal Info -->
+          <div class="space-y-3">
+            <div>
+              <label class="text-sm text-gray-500">เลขบัตรประชาชน</label>
+              <p
+                id="resultCid"
+                class="text-xl font-mono font-bold text-indigo-600"
+              ></p>
+            </div>
+            <div>
+              <label class="text-sm text-gray-500">ชื่อ-นามสกุล (ไทย)</label>
+              <p id="resultNameTh" class="text-lg font-semibold"></p>
+            </div>
+            <div>
+              <label class="text-sm text-gray-500">ชื่อ-นามสกุล (อังกฤษ)</label>
+              <p id="resultNameEn" class="text-lg"></p>
+            </div>
+            <div class="grid grid-cols-2 gap-4">
+              <div>
+                <label class="text-sm text-gray-500">วันเกิด</label>
+                <p id="resultBirthDate" class="font-medium"></p>
+              </div>
+              <div>
+                <label class="text-sm text-gray-500">เพศ</label>
+                <p id="resultGender" class="font-medium"></p>
+              </div>
+            </div>
+          </div>
+
+          <!-- Address -->
+          <div class="space-y-3">
+            <div>
+              <label class="text-sm text-gray-500">ที่อยู่</label>
+              <p id="resultAddress" class=""></p>
+            </div>
+            <div class="grid grid-cols-2 gap-4">
+              <div>
+                <label class="text-sm text-gray-500">วันออกบัตร</label>
+                <p id="resultIssueDate" class="font-medium"></p>
+              </div>
+              <div>
+                <label class="text-sm text-gray-500">วันหมดอายุ</label>
+                <p id="resultExpireDate" class="font-medium"></p>
+              </div>
+            </div>
+            <div>
+              <label class="text-sm text-gray-500">ผู้ออกบัตร</label>
+              <p id="resultIssuer" class="text-sm"></p>
+            </div>
+          </div>
+        </div>
+
+        <!-- JSON Response -->
+        <div class="mt-6 pt-6 border-t">
+          <div class="flex justify-between items-center mb-2">
+            <label class="text-sm text-gray-500">JSON Response</label>
+            <button
+              onclick="copyJson()"
+              class="text-sm text-indigo-600 hover:text-indigo-800"
+            >
+              📋 คัดลอก
+            </button>
+          </div>
+          <pre
+            id="resultJson"
+            class="bg-gray-900 text-green-400 p-4 rounded-lg text-xs overflow-x-auto max-h-60"
+          ></pre>
+        </div>
+      </div>
+
+      <!-- Error Card -->
+      <div
+        id="errorCard"
+        class="bg-red-50 border border-red-200 rounded-xl p-6 hidden"
+      >
+        <h3 class="font-semibold text-red-800 mb-2">❌ เกิดข้อผิดพลาด</h3>
+        <p id="errorMessage" class="text-red-700"></p>
+      </div>
+    </div>
+
+    <script>
+      // Thai ID Scanner Client
+      const ThaiIDScanner = {
+        localAgentUrl: "http://localhost:5051",
+
+        async checkAgent() {
+          try {
+            const response = await fetch(`${this.localAgentUrl}/api/health`, {
+              method: "GET",
+              mode: "cors",
+            });
+            const data = await response.json();
+            return {
+              running: true,
+              hasReader: data.hasReader,
+              readers: data.readers,
+            };
+          } catch (error) {
+            return {
+              running: false,
+              error: "Local Agent ไม่ได้รัน",
+            };
+          }
+        },
+
+        async scan(includePhoto = false) {
+          const url = includePhoto
+            ? `${this.localAgentUrl}/api/scan/photo`
+            : `${this.localAgentUrl}/api/scan`;
+
+          const response = await fetch(url, {
+            method: "POST",
+            mode: "cors",
+            headers: { "Content-Type": "application/json" },
+          });
+
+          return await response.json();
+        },
+      };
+
+      // Check status on load
+      async function checkStatus() {
+        const agentStatusEl = document.getElementById("agentStatus");
+        const agentTextEl = document.getElementById("agentText");
+        const readerStatusEl = document.getElementById("readerStatus");
+        const readerTextEl = document.getElementById("readerText");
+        const readerListEl = document.getElementById("readerList");
+        const scanBtn = document.getElementById("scanBtn");
+        const instructionsEl = document.getElementById("instructions");
+
+        const status = await ThaiIDScanner.checkAgent();
+
+        if (status.running) {
+          agentStatusEl.className = "w-4 h-4 rounded-full bg-green-500";
+          agentTextEl.textContent = "✅ Local Agent รันอยู่";
+
+          if (status.hasReader) {
+            readerStatusEl.className = "w-4 h-4 rounded-full bg-green-500";
+            readerTextEl.textContent = "✅ พบเครื่องอ่านบัตร";
+            readerListEl.textContent = "📍 " + status.readers.join(", ");
+            readerListEl.classList.remove("hidden");
+            scanBtn.disabled = false;
+            instructionsEl.classList.add("hidden");
+          } else {
+            readerStatusEl.className = "w-4 h-4 rounded-full bg-yellow-500";
+            readerTextEl.textContent = "⚠️ ไม่พบเครื่องอ่านบัตร";
+          }
+        } else {
+          agentStatusEl.className = "w-4 h-4 rounded-full bg-red-500";
+          agentTextEl.textContent = "❌ Local Agent ไม่ได้รัน";
+          readerStatusEl.className = "w-4 h-4 rounded-full bg-gray-300";
+          readerTextEl.textContent = "ไม่สามารถตรวจสอบได้";
+        }
+      }
+
+      // Scan card
+      async function scanCard() {
+        const scanBtn = document.getElementById("scanBtn");
+        const scanBtnText = document.getElementById("scanBtnText");
+        const resultCard = document.getElementById("resultCard");
+        const errorCard = document.getElementById("errorCard");
+
+        // Reset
+        resultCard.classList.add("hidden");
+        errorCard.classList.add("hidden");
+
+        // Show loading
+        scanBtn.disabled = true;
+        scanBtnText.textContent = "⏳ กำลังอ่านบัตร...";
+
+        try {
+          const result = await ThaiIDScanner.scan(false);
+
+          if (result.success) {
+            // Show result
+            document.getElementById("resultCid").textContent = result.data.cid;
+            document.getElementById("resultNameTh").textContent =
+              result.data.name?.th?.fullName || "-";
+            document.getElementById("resultNameEn").textContent =
+              result.data.name?.en?.fullName || "-";
+            document.getElementById("resultBirthDate").textContent =
+              result.data.birthDate || "-";
+            document.getElementById("resultGender").textContent =
+              result.data.gender || "-";
+            document.getElementById("resultAddress").textContent =
+              result.data.address?.full || "-";
+            document.getElementById("resultIssueDate").textContent =
+              result.data.issueDate || "-";
+            document.getElementById("resultExpireDate").textContent =
+              result.data.expireDate || "-";
+            document.getElementById("resultIssuer").textContent =
+              result.data.issuer || "-";
+            document.getElementById("resultJson").textContent = JSON.stringify(
+              result,
+              null,
+              2
+            );
+
+            resultCard.classList.remove("hidden");
+          } else {
+            throw new Error(result.message || "สแกนไม่สำเร็จ");
+          }
+        } catch (error) {
+          document.getElementById("errorMessage").textContent = error.message;
+          errorCard.classList.remove("hidden");
+        } finally {
+          scanBtn.disabled = false;
+          scanBtnText.textContent = "🔍 สแกนบัตรประชาชน";
+        }
+      }
+
+      // Copy JSON
+      function copyJson() {
+        const json = document.getElementById("resultJson").textContent;
+        navigator.clipboard.writeText(json).then(() => {
+          alert("คัดลอก JSON แล้ว!");
+        });
+      }
+
+      // Check status every 5 seconds
+      checkStatus();
+      setInterval(checkStatus, 5000);
+    </script>
+  </body>
+</html>

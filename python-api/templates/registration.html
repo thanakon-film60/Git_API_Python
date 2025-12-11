@@ -1,0 +1,873 @@
+<!DOCTYPE html>
+<html lang="th">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>ระบบลงทะเบียน - สแกนบัตรประชาชน</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link
+      href="https://fonts.googleapis.com/css2?family=Sarabun:wght@300;400;500;600;700&display=swap"
+      rel="stylesheet"
+    />
+    <style>
+      * {
+        font-family: "Sarabun", sans-serif;
+      }
+      .gradient-bg {
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      }
+      .card-shadow {
+        box-shadow: 0 20px 60px rgba(0, 0, 0, 0.1);
+      }
+      .scan-btn {
+        background: linear-gradient(135deg, #11998e 0%, #38ef7d 100%);
+        transition: all 0.3s ease;
+      }
+      .scan-btn:hover:not(:disabled) {
+        transform: translateY(-3px);
+        box-shadow: 0 15px 40px rgba(17, 153, 142, 0.4);
+      }
+      .scan-btn:disabled {
+        opacity: 0.5;
+        cursor: not-allowed;
+      }
+      .pulse {
+        animation: pulse 2s infinite;
+      }
+      @keyframes pulse {
+        0%,
+        100% {
+          box-shadow: 0 0 0 0 rgba(17, 153, 142, 0.4);
+        }
+        50% {
+          box-shadow: 0 0 0 20px rgba(17, 153, 142, 0);
+        }
+      }
+      .status-dot {
+        width: 12px;
+        height: 12px;
+        border-radius: 50%;
+      }
+      .status-online {
+        background: #10b981;
+        box-shadow: 0 0 10px #10b981;
+      }
+      .status-offline {
+        background: #ef4444;
+      }
+      .status-checking {
+        background: #f59e0b;
+        animation: blink 1s infinite;
+      }
+      @keyframes blink {
+        0%,
+        100% {
+          opacity: 1;
+        }
+        50% {
+          opacity: 0.3;
+        }
+      }
+      .field-highlight {
+        animation: highlight 0.5s ease;
+      }
+      @keyframes highlight {
+        0% {
+          background: #d1fae5;
+        }
+        100% {
+          background: white;
+        }
+      }
+      .id-card {
+        background: linear-gradient(
+          145deg,
+          #1e3a5f 0%,
+          #2d5a87 50%,
+          #1e3a5f 100%
+        );
+        border: 3px solid #c9a227;
+      }
+    </style>
+  </head>
+  <body class="bg-gray-100 min-h-screen">
+    <!-- Header -->
+    <header class="gradient-bg text-white py-6 shadow-lg">
+      <div class="max-w-6xl mx-auto px-4 flex items-center justify-between">
+        <div class="flex items-center space-x-4">
+          <div
+            class="w-12 h-12 bg-white/20 rounded-xl flex items-center justify-center"
+          >
+            <svg class="w-8 h-8" fill="currentColor" viewBox="0 0 24 24">
+              <path
+                d="M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z"
+              />
+            </svg>
+          </div>
+          <div>
+            <h1 class="text-2xl font-bold">ระบบลงทะเบียน</h1>
+            <p class="text-white/80 text-sm">
+              Registration System with Thai ID Card Scanner
+            </p>
+          </div>
+        </div>
+        <div
+          class="flex items-center space-x-3 bg-white/10 rounded-full px-4 py-2"
+        >
+          <div id="statusDot" class="status-dot status-checking"></div>
+          <span id="statusText" class="text-sm">กำลังตรวจสอบ...</span>
+        </div>
+      </div>
+    </header>
+
+    <main class="max-w-6xl mx-auto px-4 py-8">
+      <!-- Alert for Local Agent -->
+      <div
+        id="agentAlert"
+        class="bg-amber-50 border-l-4 border-amber-500 p-4 mb-6 rounded-r-lg hidden"
+      >
+        <div class="flex items-start">
+          <svg
+            class="w-6 h-6 text-amber-500 mr-3 flex-shrink-0"
+            fill="none"
+            stroke="currentColor"
+            viewBox="0 0 24 24"
+          >
+            <path
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              stroke-width="2"
+              d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"
+            ></path>
+          </svg>
+          <div>
+            <h3 class="font-semibold text-amber-800">
+              ต้องรัน Local Agent ก่อน
+            </h3>
+            <p class="text-amber-700 text-sm mt-1">
+              กรุณารันโปรแกรม
+              <code class="bg-amber-100 px-2 py-0.5 rounded"
+                >python thai_id_local_agent.py</code
+              >
+              บนเครื่องของคุณ
+            </p>
+            <button
+              onclick="showInstructions()"
+              class="mt-2 text-amber-600 hover:text-amber-800 text-sm underline"
+            >
+              ดูวิธีติดตั้ง →
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+        <!-- Left Panel - Scanner -->
+        <div class="lg:col-span-1 space-y-6">
+          <!-- ID Card Preview -->
+          <div class="bg-white rounded-2xl card-shadow p-6">
+            <h2 class="text-lg font-semibold text-gray-800 mb-4">
+              🎴 บัตรประชาชน
+            </h2>
+
+            <div
+              id="idCardPreview"
+              class="id-card rounded-xl p-4 text-white mb-6"
+            >
+              <div class="flex justify-between items-start mb-4">
+                <div>
+                  <p class="text-xs opacity-70">THAILAND</p>
+                  <p class="text-sm font-semibold">บัตรประจำตัวประชาชน</p>
+                  <p class="text-xs opacity-70">Thai National ID Card</p>
+                </div>
+                <div
+                  class="w-16 h-20 bg-white/20 rounded flex items-center justify-center"
+                >
+                  <svg
+                    id="photoPlaceholder"
+                    class="w-10 h-10 text-white/50"
+                    fill="currentColor"
+                    viewBox="0 0 24 24"
+                  >
+                    <path
+                      d="M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z"
+                    />
+                  </svg>
+                </div>
+              </div>
+              <div id="cardInfo">
+                <p id="cardName" class="font-semibold text-lg">รอสแกนบัตร...</p>
+                <p
+                  id="cardCid"
+                  class="font-mono text-xl tracking-wider mt-1 opacity-70"
+                >
+                  X-XXXX-XXXXX-XX-X
+                </p>
+              </div>
+            </div>
+
+            <!-- Scan Button -->
+            <button
+              id="scanBtn"
+              onclick="scanCard()"
+              disabled
+              class="scan-btn w-full py-4 rounded-xl text-white font-bold text-lg flex items-center justify-center space-x-3"
+            >
+              <svg
+                class="w-6 h-6"
+                fill="none"
+                stroke="currentColor"
+                viewBox="0 0 24 24"
+              >
+                <path
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  stroke-width="2"
+                  d="M12 4v1m6 11h2m-6 0h-2v4m0-11v3m0 0h.01M12 12h4.01M16 20h4M4 12h4m12 0h.01M5 8h2a1 1 0 001-1V5a1 1 0 00-1-1H5a1 1 0 00-1 1v2a1 1 0 001 1zm12 0h2a1 1 0 001-1V5a1 1 0 00-1-1h-2a1 1 0 00-1 1v2a1 1 0 001 1zM5 20h2a1 1 0 001-1v-2a1 1 0 00-1-1H5a1 1 0 00-1 1v2a1 1 0 001 1z"
+                ></path>
+              </svg>
+              <span id="scanBtnText">สแกนบัตรประชาชน</span>
+            </button>
+
+            <p class="text-center text-gray-500 text-sm mt-3">
+              ใส่บัตรในเครื่องอ่านแล้วกดสแกน
+            </p>
+          </div>
+
+          <!-- Reader Info -->
+          <div class="bg-white rounded-2xl card-shadow p-6">
+            <h3 class="font-semibold text-gray-800 mb-3">📡 เครื่องอ่านบัตร</h3>
+            <div id="readerInfo" class="text-sm text-gray-600">
+              <p>กำลังตรวจสอบ...</p>
+            </div>
+          </div>
+        </div>
+
+        <!-- Right Panel - Form -->
+        <div class="lg:col-span-2">
+          <div class="bg-white rounded-2xl card-shadow p-6">
+            <div class="flex items-center justify-between mb-6">
+              <h2 class="text-xl font-bold text-gray-800">
+                📋 ข้อมูลผู้ลงทะเบียน
+              </h2>
+              <span id="scanTimeInfo" class="text-sm text-gray-500"></span>
+            </div>
+
+            <form id="registrationForm">
+              <!-- CID -->
+              <div class="mb-6">
+                <label class="block text-sm font-medium text-gray-700 mb-2"
+                  >เลขประจำตัวประชาชน</label
+                >
+                <input
+                  type="text"
+                  id="inputCid"
+                  class="w-full px-4 py-3 text-2xl font-mono tracking-widest border-2 border-gray-200 rounded-xl focus:border-indigo-500 focus:outline-none transition"
+                  placeholder="X-XXXX-XXXXX-XX-X"
+                  readonly
+                />
+              </div>
+
+              <!-- Thai Name -->
+              <div class="grid grid-cols-4 gap-4 mb-4">
+                <div>
+                  <label class="block text-sm font-medium text-gray-700 mb-1"
+                    >คำนำหน้า</label
+                  >
+                  <input
+                    type="text"
+                    id="inputTitleTh"
+                    class="w-full px-3 py-2 border border-gray-200 rounded-lg focus:border-indigo-500 focus:outline-none"
+                    placeholder="นาย"
+                    readonly
+                  />
+                </div>
+                <div>
+                  <label class="block text-sm font-medium text-gray-700 mb-1"
+                    >ชื่อ</label
+                  >
+                  <input
+                    type="text"
+                    id="inputFirstNameTh"
+                    class="w-full px-3 py-2 border border-gray-200 rounded-lg focus:border-indigo-500 focus:outline-none"
+                    placeholder="ชื่อภาษาไทย"
+                    readonly
+                  />
+                </div>
+                <div>
+                  <label class="block text-sm font-medium text-gray-700 mb-1"
+                    >ชื่อกลาง</label
+                  >
+                  <input
+                    type="text"
+                    id="inputMiddleNameTh"
+                    class="w-full px-3 py-2 border border-gray-200 rounded-lg focus:border-indigo-500 focus:outline-none"
+                    placeholder="-"
+                    readonly
+                  />
+                </div>
+                <div>
+                  <label class="block text-sm font-medium text-gray-700 mb-1"
+                    >นามสกุล</label
+                  >
+                  <input
+                    type="text"
+                    id="inputLastNameTh"
+                    class="w-full px-3 py-2 border border-gray-200 rounded-lg focus:border-indigo-500 focus:outline-none"
+                    placeholder="นามสกุลภาษาไทย"
+                    readonly
+                  />
+                </div>
+              </div>
+
+              <!-- English Name -->
+              <div class="grid grid-cols-4 gap-4 mb-4">
+                <div>
+                  <label class="block text-sm font-medium text-gray-700 mb-1"
+                    >Title</label
+                  >
+                  <input
+                    type="text"
+                    id="inputTitleEn"
+                    class="w-full px-3 py-2 border border-gray-200 rounded-lg focus:border-indigo-500 focus:outline-none"
+                    placeholder="Mr."
+                    readonly
+                  />
+                </div>
+                <div>
+                  <label class="block text-sm font-medium text-gray-700 mb-1"
+                    >First Name</label
+                  >
+                  <input
+                    type="text"
+                    id="inputFirstNameEn"
+                    class="w-full px-3 py-2 border border-gray-200 rounded-lg focus:border-indigo-500 focus:outline-none"
+                    placeholder="First Name"
+                    readonly
+                  />
+                </div>
+                <div>
+                  <label class="block text-sm font-medium text-gray-700 mb-1"
+                    >Middle Name</label
+                  >
+                  <input
+                    type="text"
+                    id="inputMiddleNameEn"
+                    class="w-full px-3 py-2 border border-gray-200 rounded-lg focus:border-indigo-500 focus:outline-none"
+                    placeholder="-"
+                    readonly
+                  />
+                </div>
+                <div>
+                  <label class="block text-sm font-medium text-gray-700 mb-1"
+                    >Last Name</label
+                  >
+                  <input
+                    type="text"
+                    id="inputLastNameEn"
+                    class="w-full px-3 py-2 border border-gray-200 rounded-lg focus:border-indigo-500 focus:outline-none"
+                    placeholder="Last Name"
+                    readonly
+                  />
+                </div>
+              </div>
+
+              <!-- DOB, Gender -->
+              <div class="grid grid-cols-3 gap-4 mb-4">
+                <div>
+                  <label class="block text-sm font-medium text-gray-700 mb-1"
+                    >วันเกิด</label
+                  >
+                  <input
+                    type="text"
+                    id="inputBirthDate"
+                    class="w-full px-3 py-2 border border-gray-200 rounded-lg focus:border-indigo-500 focus:outline-none"
+                    placeholder="วว/ดด/ปปปป"
+                    readonly
+                  />
+                </div>
+                <div>
+                  <label class="block text-sm font-medium text-gray-700 mb-1"
+                    >เพศ</label
+                  >
+                  <input
+                    type="text"
+                    id="inputGender"
+                    class="w-full px-3 py-2 border border-gray-200 rounded-lg focus:border-indigo-500 focus:outline-none"
+                    placeholder="ชาย/หญิง"
+                    readonly
+                  />
+                </div>
+                <div>
+                  <label class="block text-sm font-medium text-gray-700 mb-1"
+                    >ศาสนา</label
+                  >
+                  <input
+                    type="text"
+                    id="inputReligion"
+                    class="w-full px-3 py-2 border border-gray-200 rounded-lg focus:border-indigo-500 focus:outline-none"
+                    placeholder="พุทธ"
+                    readonly
+                  />
+                </div>
+              </div>
+
+              <!-- Address -->
+              <div class="mb-4">
+                <label class="block text-sm font-medium text-gray-700 mb-1"
+                  >ที่อยู่</label
+                >
+                <textarea
+                  id="inputAddress"
+                  rows="2"
+                  class="w-full px-3 py-2 border border-gray-200 rounded-lg focus:border-indigo-500 focus:outline-none resize-none"
+                  placeholder="ที่อยู่ตามบัตรประชาชน"
+                  readonly
+                ></textarea>
+              </div>
+
+              <!-- Address Details -->
+              <div class="grid grid-cols-4 gap-4 mb-4">
+                <div>
+                  <label class="block text-sm font-medium text-gray-700 mb-1"
+                    >แขวง/ตำบล</label
+                  >
+                  <input
+                    type="text"
+                    id="inputSubDistrict"
+                    class="w-full px-3 py-2 border border-gray-200 rounded-lg focus:border-indigo-500 focus:outline-none"
+                    placeholder="-"
+                    readonly
+                  />
+                </div>
+                <div>
+                  <label class="block text-sm font-medium text-gray-700 mb-1"
+                    >เขต/อำเภอ</label
+                  >
+                  <input
+                    type="text"
+                    id="inputDistrict"
+                    class="w-full px-3 py-2 border border-gray-200 rounded-lg focus:border-indigo-500 focus:outline-none"
+                    placeholder="-"
+                    readonly
+                  />
+                </div>
+                <div>
+                  <label class="block text-sm font-medium text-gray-700 mb-1"
+                    >จังหวัด</label
+                  >
+                  <input
+                    type="text"
+                    id="inputProvince"
+                    class="w-full px-3 py-2 border border-gray-200 rounded-lg focus:border-indigo-500 focus:outline-none"
+                    placeholder="-"
+                    readonly
+                  />
+                </div>
+                <div>
+                  <label class="block text-sm font-medium text-gray-700 mb-1"
+                    >รหัสไปรษณีย์</label
+                  >
+                  <input
+                    type="text"
+                    id="inputPostalCode"
+                    class="w-full px-3 py-2 border border-gray-200 rounded-lg focus:border-indigo-500 focus:outline-none"
+                    placeholder="-"
+                    readonly
+                  />
+                </div>
+              </div>
+
+              <!-- Card Dates -->
+              <div class="grid grid-cols-3 gap-4 mb-6">
+                <div>
+                  <label class="block text-sm font-medium text-gray-700 mb-1"
+                    >วันออกบัตร</label
+                  >
+                  <input
+                    type="text"
+                    id="inputIssueDate"
+                    class="w-full px-3 py-2 border border-gray-200 rounded-lg focus:border-indigo-500 focus:outline-none"
+                    placeholder="วว/ดด/ปปปป"
+                    readonly
+                  />
+                </div>
+                <div>
+                  <label class="block text-sm font-medium text-gray-700 mb-1"
+                    >วันหมดอายุ</label
+                  >
+                  <input
+                    type="text"
+                    id="inputExpireDate"
+                    class="w-full px-3 py-2 border border-gray-200 rounded-lg focus:border-indigo-500 focus:outline-none"
+                    placeholder="วว/ดด/ปปปป"
+                    readonly
+                  />
+                </div>
+                <div>
+                  <label class="block text-sm font-medium text-gray-700 mb-1"
+                    >ผู้ออกบัตร</label
+                  >
+                  <input
+                    type="text"
+                    id="inputIssuer"
+                    class="w-full px-3 py-2 border border-gray-200 rounded-lg focus:border-indigo-500 focus:outline-none text-xs"
+                    placeholder="-"
+                    readonly
+                  />
+                </div>
+              </div>
+
+              <!-- Action Buttons -->
+              <div class="flex justify-between items-center pt-4 border-t">
+                <button
+                  type="button"
+                  onclick="clearForm()"
+                  class="px-6 py-2 border border-gray-300 rounded-lg text-gray-600 hover:bg-gray-50 transition"
+                >
+                  ล้างข้อมูล
+                </button>
+                <div class="space-x-3">
+                  <button
+                    type="button"
+                    onclick="exportData()"
+                    class="px-6 py-2 bg-blue-500 text-white rounded-lg hover:bg-blue-600 transition"
+                  >
+                    📥 Export JSON
+                  </button>
+                  <button
+                    type="submit"
+                    id="submitBtn"
+                    disabled
+                    class="px-8 py-2 bg-green-500 text-white rounded-lg hover:bg-green-600 transition disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    ✅ บันทึกข้อมูล
+                  </button>
+                </div>
+              </div>
+            </form>
+          </div>
+        </div>
+      </div>
+    </main>
+
+    <!-- Instructions Modal -->
+    <div
+      id="instructionsModal"
+      class="fixed inset-0 bg-black/50 flex items-center justify-center z-50 hidden"
+    >
+      <div class="bg-white rounded-2xl max-w-lg w-full mx-4 p-6">
+        <div class="flex justify-between items-center mb-4">
+          <h3 class="text-xl font-bold text-gray-800">
+            📋 วิธีติดตั้ง Local Agent
+          </h3>
+          <button
+            onclick="hideInstructions()"
+            class="text-gray-500 hover:text-gray-700"
+          >
+            <svg
+              class="w-6 h-6"
+              fill="none"
+              stroke="currentColor"
+              viewBox="0 0 24 24"
+            >
+              <path
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                stroke-width="2"
+                d="M6 18L18 6M6 6l12 12"
+              ></path>
+            </svg>
+          </button>
+        </div>
+        <ol class="space-y-3 text-gray-700">
+          <li class="flex items-start">
+            <span
+              class="bg-indigo-100 text-indigo-600 font-bold w-6 h-6 rounded-full flex items-center justify-center mr-3 flex-shrink-0"
+              >1</span
+            >
+            <div>
+              <p class="font-medium">ดาวน์โหลดไฟล์</p>
+              <code class="text-sm bg-gray-100 px-2 py-1 rounded"
+                >thai_id_local_agent.py</code
+              >
+            </div>
+          </li>
+          <li class="flex items-start">
+            <span
+              class="bg-indigo-100 text-indigo-600 font-bold w-6 h-6 rounded-full flex items-center justify-center mr-3 flex-shrink-0"
+              >2</span
+            >
+            <div>
+              <p class="font-medium">ติดตั้ง Library</p>
+              <code class="text-sm bg-gray-100 px-2 py-1 rounded block mt-1"
+                >pip install flask flask-cors pyscard</code
+              >
+            </div>
+          </li>
+          <li class="flex items-start">
+            <span
+              class="bg-indigo-100 text-indigo-600 font-bold w-6 h-6 rounded-full flex items-center justify-center mr-3 flex-shrink-0"
+              >3</span
+            >
+            <div>
+              <p class="font-medium">เสียบเครื่องอ่านบัตร GLINK</p>
+              <p class="text-sm text-gray-500">เสียบ USB และใส่บัตรประชาชน</p>
+            </div>
+          </li>
+          <li class="flex items-start">
+            <span
+              class="bg-indigo-100 text-indigo-600 font-bold w-6 h-6 rounded-full flex items-center justify-center mr-3 flex-shrink-0"
+              >4</span
+            >
+            <div>
+              <p class="font-medium">รันโปรแกรม</p>
+              <code class="text-sm bg-gray-100 px-2 py-1 rounded block mt-1"
+                >python thai_id_local_agent.py</code
+              >
+            </div>
+          </li>
+          <li class="flex items-start">
+            <span
+              class="bg-indigo-100 text-indigo-600 font-bold w-6 h-6 rounded-full flex items-center justify-center mr-3 flex-shrink-0"
+              >5</span
+            >
+            <div>
+              <p class="font-medium">กลับมาที่หน้านี้</p>
+              <p class="text-sm text-gray-500">ระบบจะเชื่อมต่ออัตโนมัติ</p>
+            </div>
+          </li>
+        </ol>
+        <button
+          onclick="hideInstructions()"
+          class="w-full mt-6 py-3 bg-indigo-500 text-white rounded-lg hover:bg-indigo-600 transition"
+        >
+          เข้าใจแล้ว
+        </button>
+      </div>
+    </div>
+
+    <!-- Toast -->
+    <div
+      id="toast"
+      class="fixed bottom-6 right-6 transform translate-y-20 opacity-0 transition-all duration-300 z-50"
+    >
+      <div
+        class="bg-gray-800 text-white px-6 py-3 rounded-lg shadow-lg flex items-center space-x-3"
+      >
+        <span id="toastIcon">✅</span>
+        <span id="toastMessage">Success!</span>
+      </div>
+    </div>
+
+    <script>
+      // ==================== Configuration ====================
+      const LOCAL_AGENT_URL = "http://localhost:5051";
+      let currentData = null;
+      let isAgentConnected = false;
+
+      // ==================== Check Agent Status ====================
+      async function checkAgentStatus() {
+        const statusDot = document.getElementById("statusDot");
+        const statusText = document.getElementById("statusText");
+        const scanBtn = document.getElementById("scanBtn");
+        const agentAlert = document.getElementById("agentAlert");
+        const readerInfo = document.getElementById("readerInfo");
+
+        try {
+          const response = await fetch(`${LOCAL_AGENT_URL}/api/health`, {
+            method: "GET",
+            mode: "cors",
+          });
+          const data = await response.json();
+
+          isAgentConnected = true;
+          statusDot.className = "status-dot status-online";
+          agentAlert.classList.add("hidden");
+
+          if (data.hasReader && data.readers?.length > 0) {
+            statusText.textContent = "พร้อมสแกน";
+            scanBtn.disabled = false;
+            scanBtn.classList.add("pulse");
+            readerInfo.innerHTML = `
+                        <p class="text-green-600 font-medium">✅ เชื่อมต่อแล้ว</p>
+                        <p class="text-gray-500 mt-1">${data.readers[0]}</p>
+                    `;
+          } else {
+            statusText.textContent = "ไม่พบเครื่องอ่าน";
+            scanBtn.disabled = true;
+            readerInfo.innerHTML = `<p class="text-amber-600">⚠️ กรุณาเสียบเครื่องอ่านบัตร</p>`;
+          }
+        } catch (error) {
+          isAgentConnected = false;
+          statusDot.className = "status-dot status-offline";
+          statusText.textContent = "ไม่ได้เชื่อมต่อ";
+          scanBtn.disabled = true;
+          scanBtn.classList.remove("pulse");
+          agentAlert.classList.remove("hidden");
+          readerInfo.innerHTML = `<p class="text-red-500">❌ Local Agent ไม่ได้รัน</p>`;
+        }
+      }
+
+      // ==================== Scan Card ====================
+      async function scanCard() {
+        const scanBtn = document.getElementById("scanBtn");
+        const scanBtnText = document.getElementById("scanBtnText");
+
+        scanBtn.disabled = true;
+        scanBtn.classList.remove("pulse");
+        scanBtnText.textContent = "⏳ กำลังอ่านบัตร...";
+
+        try {
+          const response = await fetch(`${LOCAL_AGENT_URL}/api/scan`, {
+            method: "POST",
+            mode: "cors",
+            headers: { "Content-Type": "application/json" },
+          });
+
+          const result = await response.json();
+
+          if (result.success) {
+            currentData = result;
+            fillForm(result.data);
+            updateCardPreview(result.data);
+            document.getElementById(
+              "scanTimeInfo"
+            ).textContent = `⏱️ ${result.scanTime}s`;
+            document.getElementById("submitBtn").disabled = false;
+            showToast("✅", "อ่านบัตรสำเร็จ!");
+          } else {
+            showToast("❌", result.message || "อ่านบัตรไม่สำเร็จ");
+          }
+        } catch (error) {
+          showToast("❌", "ไม่สามารถเชื่อมต่อได้ - ตรวจสอบว่าใส่บัตรแล้ว");
+        } finally {
+          scanBtn.disabled = false;
+          scanBtn.classList.add("pulse");
+          scanBtnText.textContent = "สแกนบัตรประชาชน";
+        }
+      }
+
+      // ==================== Fill Form ====================
+      function fillForm(data) {
+        const fields = {
+          inputCid: data.cid,
+          inputTitleTh: data.name?.th?.title || "",
+          inputFirstNameTh: data.name?.th?.firstName || "",
+          inputMiddleNameTh: data.name?.th?.middleName || "-",
+          inputLastNameTh: data.name?.th?.lastName || "",
+          inputTitleEn: data.name?.en?.title || "",
+          inputFirstNameEn: data.name?.en?.firstName || "",
+          inputMiddleNameEn: data.name?.en?.middleName || "-",
+          inputLastNameEn: data.name?.en?.lastName || "",
+          inputBirthDate: data.birthDate || "",
+          inputGender: data.gender || "",
+          inputReligion: data.religion || "พุทธ",
+          inputAddress: data.address?.full || "",
+          inputSubDistrict: data.address?.subDistrict || "",
+          inputDistrict: data.address?.district || "",
+          inputProvince: data.address?.province || "",
+          inputPostalCode: data.address?.postalCode || "",
+          inputIssueDate: data.issueDate || "",
+          inputExpireDate: data.expireDate || "",
+          inputIssuer: data.issuer || "",
+        };
+
+        let delay = 0;
+        for (const [id, value] of Object.entries(fields)) {
+          setTimeout(() => {
+            const el = document.getElementById(id);
+            if (el) {
+              el.value = value;
+              el.classList.add("field-highlight");
+              setTimeout(() => el.classList.remove("field-highlight"), 500);
+            }
+          }, delay);
+          delay += 30;
+        }
+      }
+
+      // ==================== Update Card Preview ====================
+      function updateCardPreview(data) {
+        document.getElementById("cardName").textContent =
+          data.name?.th?.fullName || "-";
+        document.getElementById("cardCid").textContent = data.cid || "-";
+      }
+
+      // ==================== Clear Form ====================
+      function clearForm() {
+        document.getElementById("registrationForm").reset();
+        document.getElementById("cardName").textContent = "รอสแกนบัตร...";
+        document.getElementById("cardCid").textContent = "X-XXXX-XXXXX-XX-X";
+        document.getElementById("scanTimeInfo").textContent = "";
+        document.getElementById("submitBtn").disabled = true;
+        currentData = null;
+        showToast("🗑️", "ล้างข้อมูลแล้ว");
+      }
+
+      // ==================== Export Data ====================
+      function exportData() {
+        if (!currentData) {
+          showToast("⚠️", "ไม่มีข้อมูลให้ export");
+          return;
+        }
+
+        const blob = new Blob([JSON.stringify(currentData, null, 2)], {
+          type: "application/json",
+        });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = `idcard_${
+          currentData.data?.cid?.replace(/-/g, "") || "data"
+        }.json`;
+        a.click();
+        URL.revokeObjectURL(url);
+        showToast("📥", "Export สำเร็จ!");
+      }
+
+      // ==================== Form Submit ====================
+      document
+        .getElementById("registrationForm")
+        .addEventListener("submit", function (e) {
+          e.preventDefault();
+          if (currentData) {
+            // ส่งข้อมูลไป Railway Server
+            console.log("Submitting data:", currentData);
+            showToast("✅", "บันทึกข้อมูลสำเร็จ!");
+
+            // TODO: ส่งข้อมูลไป API ของคุณ
+            // fetch('/api/register', {
+            //     method: 'POST',
+            //     headers: { 'Content-Type': 'application/json' },
+            //     body: JSON.stringify(currentData.data)
+            // });
+          }
+        });
+
+      // ==================== Modal Functions ====================
+      function showInstructions() {
+        document.getElementById("instructionsModal").classList.remove("hidden");
+      }
+
+      function hideInstructions() {
+        document.getElementById("instructionsModal").classList.add("hidden");
+      }
+
+      // ==================== Toast ====================
+      function showToast(icon, message) {
+        const toast = document.getElementById("toast");
+        document.getElementById("toastIcon").textContent = icon;
+        document.getElementById("toastMessage").textContent = message;
+        toast.classList.remove("translate-y-20", "opacity-0");
+        setTimeout(() => {
+          toast.classList.add("translate-y-20", "opacity-0");
+        }, 3000);
+      }
+
+      // ==================== Initialize ====================
+      checkAgentStatus();
+      setInterval(checkAgentStatus, 3000); // Check every 3 seconds
+    </script>
+  </body>
+</html>

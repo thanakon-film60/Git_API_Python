@@ -3,7 +3,7 @@ Flask API for accessing Google Sheets data (Film data)
 This API serves as a backend for the Performance Surgery Schedule system.
 """
 
-from flask import Flask, jsonify, request, send_file
+from flask import Flask, jsonify, request, send_file, render_template
 from flask_cors import CORS
 from flask_compress import Compress
 import os
@@ -3879,6 +3879,170 @@ def internal_error(error):
         'error': 'Internal server error',
         'message': str(error)
     }), 500
+
+
+# ==================== THAI ID CARD REGISTRATION PAGE ====================
+
+@app.route('/registration')
+def registration_page():
+    """หน้าลงทะเบียนด้วยบัตรประชาชน"""
+    return render_template('registration.html')
+
+
+# ==================== THAI ID CARD API ====================
+# สำหรับรับข้อมูลจาก Local Agent ที่อ่านบัตรประชาชน
+
+# เก็บข้อมูลบัตรล่าสุด (ในการใช้งานจริงควรใช้ Database)
+latest_id_card_data = {
+    'data': None,
+    'timestamp': None
+}
+
+@app.route('/api/thaiid/receive', methods=['POST', 'OPTIONS'])
+def receive_id_card():
+    """
+    รับข้อมูลบัตรประชาชนจาก Local Agent
+    Local Agent จะส่งข้อมูลมาที่ endpoint นี้หลังจากอ่านบัตรสำเร็จ
+    """
+    if request.method == 'OPTIONS':
+        response = jsonify({'status': 'ok'})
+        response.headers.add('Access-Control-Allow-Origin', '*')
+        response.headers.add('Access-Control-Allow-Headers', 'Content-Type')
+        response.headers.add('Access-Control-Allow-Methods', 'POST, OPTIONS')
+        return response
+    
+    try:
+        data = request.get_json()
+        
+        if not data:
+            return jsonify({
+                'success': False,
+                'error': 'No data received'
+            }), 400
+        
+        # เก็บข้อมูลล่าสุด
+        latest_id_card_data['data'] = data
+        latest_id_card_data['timestamp'] = datetime.now().isoformat()
+        
+        return jsonify({
+            'success': True,
+            'message': 'ได้รับข้อมูลบัตรประชาชนแล้ว',
+            'timestamp': latest_id_card_data['timestamp']
+        })
+        
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
+
+@app.route('/api/thaiid/latest', methods=['GET'])
+def get_latest_id_card():
+    """
+    ดึงข้อมูลบัตรประชาชนล่าสุดที่ได้รับจาก Local Agent
+    """
+    if latest_id_card_data['data']:
+        return jsonify({
+            'success': True,
+            'data': latest_id_card_data['data'],
+            'receivedAt': latest_id_card_data['timestamp']
+        })
+    else:
+        return jsonify({
+            'success': False,
+            'message': 'ยังไม่มีข้อมูลบัตรประชาชน'
+        }), 404
+
+@app.route('/api/thaiid/info', methods=['GET'])
+def thaiid_info():
+    """
+    ข้อมูลการใช้งาน Thai ID Card API
+    """
+    return jsonify({
+        'service': 'Thai ID Card API',
+        'version': '1.0.0',
+        'endpoints': {
+            'POST /api/thaiid/receive': 'รับข้อมูลจาก Local Agent',
+            'GET /api/thaiid/latest': 'ดึงข้อมูลบัตรล่าสุด',
+            'GET /api/thaiid/download': 'ดาวน์โหลดโปรแกรม ThaiIDAgent.exe'
+        },
+        'downloadUrl': '/api/thaiid/download',
+        'instructions': [
+            '1. ดาวน์โหลด ThaiIDAgent.exe จาก /api/thaiid/download',
+            '2. เสียบเครื่องอ่าน GLINK + ใส่บัตร',
+            '3. เปิดโปรแกรม ThaiIDAgent.exe',
+            '4. กดปุ่มสแกน → ข้อมูลจะถูกส่งมาที่ Railway',
+            '5. เรียก GET /api/thaiid/latest เพื่อดึงข้อมูล'
+        ]
+    })
+
+
+@app.route('/api/thaiid/download', methods=['GET'])
+def download_thai_id_agent():
+    """
+    ดาวน์โหลดโปรแกรม ThaiIDAgent.exe
+    """
+    import os
+    
+    # หา path ของไฟล์ exe
+    possible_paths = [
+        os.path.join(os.path.dirname(__file__), '..', 'thai_id_reader_app', 'dist', 'ThaiIDAgent.exe'),
+        os.path.join(os.path.dirname(__file__), 'static', 'ThaiIDAgent.exe'),
+        '/app/thai_id_reader_app/dist/ThaiIDAgent.exe',
+        '/app/static/ThaiIDAgent.exe'
+    ]
+    
+    exe_path = None
+    for path in possible_paths:
+        if os.path.exists(path):
+            exe_path = path
+            break
+    
+    if exe_path and os.path.exists(exe_path):
+        return send_file(
+            exe_path,
+            as_attachment=True,
+            download_name='ThaiIDAgent.exe',
+            mimetype='application/octet-stream'
+        )
+    else:
+        return jsonify({
+            'success': False,
+            'error': 'ไฟล์ ThaiIDAgent.exe ไม่พบ',
+            'message': 'กรุณาติดต่อผู้ดูแลระบบ หรือ build ไฟล์ .exe ใหม่',
+            'checkedPaths': possible_paths
+        }), 404
+
+
+@app.route('/api/thaiid/manual', methods=['GET'])
+def thai_id_manual():
+    """
+    คู่มือการใช้งาน Thai ID Card Scanner API
+    """
+    import os
+    
+    possible_paths = [
+        os.path.join(os.path.dirname(__file__), 'static', 'ThaiIDCard_API_Manual.html'),
+        '/app/static/ThaiIDCard_API_Manual.html',
+        '/app/python-api/static/ThaiIDCard_API_Manual.html'
+    ]
+    
+    manual_path = None
+    for path in possible_paths:
+        if os.path.exists(path):
+            manual_path = path
+            break
+    
+    if manual_path and os.path.exists(manual_path):
+        return send_file(
+            manual_path,
+            mimetype='text/html'
+        )
+    else:
+        return jsonify({
+            'success': False,
+            'error': 'ไม่พบไฟล์คู่มือ'
+        }), 404
 
 
 if __name__ == '__main__':
