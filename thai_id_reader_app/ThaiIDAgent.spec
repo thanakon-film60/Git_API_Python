@@ -2,7 +2,7 @@
 
 
 a = Analysis(
-    ['c:\\Users\\Pac-Man45\\Documents\\GitHub\\Git_API_Python\\thai_id_reader_app\\thai_id_agent.py'],
+    ['thai_id_agent.py'],
     pathex=[],
     binaries=[],
     datas=[],
@@ -29,7 +29,7 @@ exe = EXE(
     upx=True,
     upx_exclude=[],
     runtime_tmpdir=None,
-    console=False,
+    console=True,
     disable_windowed_traceback=False,
     argv_emulation=False,
     target_arch=None,

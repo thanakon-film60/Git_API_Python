@@ -103,8 +103,15 @@ class ThaiIDCardReader:
         
         # Select Thai ID Card Applet
         response, sw1, sw2 = self.connection.transmit(self.APDU_SELECT)
+        
+        # SW1=0x61 means "more data available" - need GET RESPONSE
+        if sw1 == 0x61:
+            get_response = [0x00, 0xC0, 0x00, 0x00, sw2]
+            response, sw1, sw2 = self.connection.transmit(get_response)
+        
+        # Check if SELECT was successful
         if sw1 != 0x90 or sw2 != 0x00:
-            raise Exception("ไม่ใช่บัตรประชาชนไทย หรือบัตรไม่รองรับ")
+            raise Exception(f"ไม่ใช่บัตรประชาชนไทย หรือบัตรไม่รองรับ (SW: {hex(sw1)} {hex(sw2)})")
         
         return True
     
@@ -199,12 +206,14 @@ class ThaiIDCardReader:
         """อ่านข้อมูลทั้งหมดจากบัตร"""
         data = {}
         
-        # CID
+        # CID - filter only digits (0-9)
         raw = self._send_apdu(self.APDU_GET_CID)
         if raw:
-            cid = raw.decode('ascii').strip()
-            data['cid'] = self._format_cid(cid)
-            data['cidRaw'] = cid
+            # Filter only ASCII digits (0x30-0x39)
+            cid = ''.join(chr(b) for b in raw if 0x30 <= b <= 0x39)
+            if len(cid) == 13:
+                data['cid'] = self._format_cid(cid)
+                data['cidRaw'] = cid
         
         # Thai Name
         raw = self._send_apdu(self.APDU_GET_NAME_TH)
@@ -224,14 +233,14 @@ class ThaiIDCardReader:
         # Date of Birth
         raw = self._send_apdu(self.APDU_GET_DOB)
         if raw:
-            dob = raw.decode('ascii').strip()
+            dob = raw.decode('ascii', errors='ignore').strip()
             data['birthDate'] = self._format_date(dob)
             data['birthDateRaw'] = dob
         
         # Gender
         raw = self._send_apdu(self.APDU_GET_GENDER)
         if raw:
-            gender_code = raw.decode('ascii').strip()
+            gender_code = raw.decode('ascii', errors='ignore').strip()
             data['gender'] = 'ชาย' if gender_code == '1' else 'หญิง'
             data['genderCode'] = gender_code
         
@@ -244,13 +253,13 @@ class ThaiIDCardReader:
         # Issue Date
         raw = self._send_apdu(self.APDU_GET_ISSUE_DATE)
         if raw:
-            issue = raw.decode('ascii').strip()
+            issue = raw.decode('ascii', errors='ignore').strip()
             data['issueDate'] = self._format_date(issue)
         
         # Expire Date
         raw = self._send_apdu(self.APDU_GET_EXPIRE_DATE)
         if raw:
-            expire = raw.decode('ascii').strip()
+            expire = raw.decode('ascii', errors='ignore').strip()
             data['expireDate'] = self._format_date(expire)
         
         # Issuer
@@ -507,6 +516,8 @@ class ThaiIDAgentApp:
 
 def run_console_mode():
     """รันในโหมด console"""
+    import time
+    
     print("=" * 50)
     print("  Thai ID Card Agent - Console Mode")
     print("=" * 50)
@@ -515,10 +526,52 @@ def run_console_mode():
     
     reader = ThaiIDCardReader()
     
-    while True:
-        print("\n" + "-" * 40)
-        input("กด Enter เพื่อสแกนบัตร (Ctrl+C เพื่อออก)...")
-        
+    # Check if stdin is available (not available in --windowed mode)
+    has_stdin = sys.stdin is not None and hasattr(sys.stdin, 'read')
+    
+    if has_stdin:
+        # Interactive mode with Enter key
+        while True:
+            print("\n" + "-" * 40)
+            try:
+                input("กด Enter เพื่อสแกนบัตร (Ctrl+C เพื่อออก)...")
+            except (RuntimeError, EOFError):
+                # stdin lost, switch to auto mode
+                has_stdin = False
+                print("⚠️ สลับไปโหมดอัตโนมัติ...")
+                break
+            
+            try:
+                print("📖 กำลังอ่านบัตร...")
+                reader.connect()
+                data = reader.read_all()
+                reader.disconnect()
+                
+                print(f"✅ อ่านสำเร็จ: {data.get('cid')} - {data.get('name', {}).get('th', {}).get('fullName')}")
+                
+                print("📤 กำลังส่งไป Railway...")
+                response = requests.post(
+                    RAILWAY_RECEIVE_ENDPOINT,
+                    json={'data': data, 'timestamp': datetime.now().isoformat()},
+                    headers={'Content-Type': 'application/json'},
+                    timeout=10
+                )
+                
+                if response.status_code == 200:
+                    print("✅ ส่งสำเร็จ!")
+                else:
+                    print(f"⚠️ Server ตอบกลับ: {response.status_code}")
+                    
+            except KeyboardInterrupt:
+                print("\n\n👋 ออกจากโปรแกรม")
+                break
+            except Exception as e:
+                reader.disconnect()
+                print(f"❌ Error: {e}")
+    
+    if not has_stdin:
+        # Auto-scan mode (for --windowed .exe without stdin)
+        print("\n🔄 โหมดอัตโนมัติ - กำลังสแกนบัตร...")
         try:
             print("📖 กำลังอ่านบัตร...")
             reader.connect()
@@ -539,13 +592,15 @@ def run_console_mode():
                 print("✅ ส่งสำเร็จ!")
             else:
                 print(f"⚠️ Server ตอบกลับ: {response.status_code}")
+            
+            print("\n✅ เสร็จสิ้น - ปิดโปรแกรมใน 5 วินาที...")
+            time.sleep(5)
                 
-        except KeyboardInterrupt:
-            print("\n\n👋 ออกจากโปรแกรม")
-            break
         except Exception as e:
             reader.disconnect()
             print(f"❌ Error: {e}")
+            print("\nปิดโปรแกรมใน 5 วินาที...")
+            time.sleep(5)
 
 
 # ====================================================================================
